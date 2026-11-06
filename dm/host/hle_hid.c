@@ -384,7 +384,7 @@ void dm_pad_set_side(int p, int role, uint64_t b, int32_t lx, int32_t ly) { HID_
         if (b & DM_BTN_X) out |= DM_BTN_UP; if (b & DM_BTN_Y) out |= DM_BTN_LEFT;
         if (b & DM_BTN_PLUS) out |= DM_BTN_MINUS;
     } else {
-        out = b & (DM_BTN_A|DM_BTN_B|DM_BTN_X|DM_BTN_Y|DM_BTN_R|DM_BTN_ZR|DM_BTN_PLUS|DM_BTN_RIGHT_SL|DM_BTN_RIGHT_SR|DM_BTN_SHAKE);
+        out = b & (DM_BTN_A|DM_BTN_B|DM_BTN_X|DM_BTN_Y|DM_BTN_R|DM_BTN_ZR|DM_BTN_PLUS|DM_BTN_RS|DM_BTN_RIGHT_SL|DM_BTN_RIGHT_SR|DM_BTN_SHAKE);
         if (b & DM_BTN_LS) out |= DM_BTN_RS;
         if (b & DM_BTN_MINUS) out |= DM_BTN_PLUS;
     }

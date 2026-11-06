@@ -3,21 +3,41 @@
 #import <GameController/GameController.h>
 #include "controller_requirements_apple.h"
 
-static NSMutableDictionary<NSString *, GCController *> *cs_devices;
+static NSMutableDictionary<NSString *, id> *cs_devices;
 static NSDictionary<NSString *, NSDictionary *> *cs_choices;
+static NSDictionary<NSString *, NSDictionary *> *cs_source_info;
 static int cs_explicit;
 
-static NSArray *cs_update(NSArray<GCController *> *devices) {
+// The owner is the input adapter's connection object, not a model name or an
+// enumeration position. GC-only clients use cs_update below. The Mac backend
+// supplies its existing transport objects, including individual HID halves.
+static NSArray *cs_update_sources(NSArray<NSDictionary *> *sources) {
     if (!cs_devices) cs_devices = [NSMutableDictionary new];
     NSMutableSet *seen = [NSMutableSet new];
     NSMutableArray *rows = [NSMutableArray new];
-    for (GCController *device in devices) if (device.extendedGamepad) {
-        NSString *key = [cs_devices allKeysForObject:device].firstObject ?: NSUUID.UUID.UUIDString;
-        cs_devices[key] = device; [seen addObject:key];
-        [rows addObject:@{@"id": key, @"name": device.vendorName ?: @"Controller"}];
+    NSMutableDictionary *info=[NSMutableDictionary new];
+    for (NSDictionary *source in sources) {
+        id owner=source[@"owner"]; if (!owner) continue;
+        NSString *key = [cs_devices allKeysForObject:owner].firstObject ?: NSUUID.UUID.UUIDString;
+        cs_devices[key] = owner; [seen addObject:key];
+        NSMutableDictionary *row=[source mutableCopy]; [row removeObjectForKey:@"owner"];
+        row[@"id"]=key; row[@"name"]=source[@"name"] ?: @"Controller"; [rows addObject:row]; info[key]=row;
     }
     for (NSString *key in cs_devices.allKeys) if (![seen containsObject:key]) [cs_devices removeObjectForKey:key];
+    cs_source_info=info;
     return rows;
+}
+static NSArray *cs_update(NSArray<GCController *> *devices) {
+    NSMutableArray *sources=[NSMutableArray new];
+    for (GCController *c in devices) if (c.extendedGamepad) [sources addObject:@{@"owner":c,@"name":c.vendorName ?: @"Controller"}];
+    return cs_update_sources(sources);
+}
+static int cs_source_player(id source, uint32_t *style) {
+    NSString *key=[cs_devices allKeysForObject:source].firstObject;
+    NSDictionary *choice=key ? cs_choices[key] : nil;
+    int player=[choice[@"player"] intValue];
+    if (style) *style=cs_style(choice[@"style"]);
+    return !choice || player==-1 ? -2 : player ? player-1 : -1;
 }
 
 static int cs_device_role(GCController *c, NSDictionary *choices) {
@@ -38,6 +58,9 @@ static NSString *cs_validate_choices(NSArray *choices, NSDictionary **accepted) 
         id role = row[@"role"];
         if (role && (![role isKindOfClass:NSString.class] || ![@[@"both",@"left",@"right"] containsObject:role])) return @"Invalid pair role.";
         if (cs_role(row) && (![style isEqual:@"pair"] || player.intValue <= 0)) return @"Choose a player and Joy-Con pair before assigning a pair role.";
+        NSString *physicalSide=cs_source_info[key][@"physicalSide"];
+        if (physicalSide && [style isEqual:@"pair"] && ![role isEqual:physicalSide])
+            return @"Use the physical Joy-Con side as this controller's pair input.";
         if (!cs_devices[key]) return @"A controller disconnected. Choose a connected controller and try again.";
         if (player.intValue > 0) {
             NSArray *group=players[player] ?: @[];
@@ -55,11 +78,7 @@ static NSString *cs_style_name(uint32_t style) {
 }
 
 static int cs_player(GCController *controller, uint32_t *style) {
-    NSString *key = [cs_devices allKeysForObject:controller].firstObject;
-    NSDictionary *choice = key ? cs_choices[key] : nil;
-    int player = [choice[@"player"] intValue];
-    if (style) *style = cs_style(choice[@"style"]);
-    return !choice || player == -1 ? -2 : player ? player - 1 : -1;
+    return cs_source_player(controller,style);
 }
 
 typedef BOOL (*cs_identify_fn)(GCController *);

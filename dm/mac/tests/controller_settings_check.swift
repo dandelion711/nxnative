@@ -65,6 +65,15 @@ import Darwin
         pair.chooseStyle(.pair,for:c.id); pair.chooseRole(.left,for:c.id); pair.choosePlayer(1,for:c.id)
         expect(pair.choices[a.id]?.player == -1 && pair.choices[a.id]?.role == .both && pair.choices[b.id]?.player == 1 && pair.choices[c.id]?.player == 1 && pair.pairingIssue == nil, "a third source replaces only the conflicting side")
 
+        let split = ControllerSettingsModel()
+        let leftHalf = LauncherController(id: "half-l", name: "Joy-Con (L)", automaticPlayer: 2, reservedPlayers: [1], physicalSide: "left")
+        let rightHalf = LauncherController(id: "half-r", name: "Joy-Con (R)", automaticPlayer: 3, reservedPlayers: [1], physicalSide: "right")
+        split.update([leftHalf,rightHalf])
+        expect(split.resolvedPlayer(for:leftHalf.id)==2 && split.resolvedPlayer(for:rightHalf.id)==3, "launch preview preserves the backend's keyboard reservation")
+        split.chooseStyle(.pair,for:leftHalf.id); split.chooseStyle(.pair,for:rightHalf.id)
+        split.choosePlayer(2,for:rightHalf.id)
+        expect(split.choices[leftHalf.id]?.role == .left && split.choices[rightHalf.id]?.role == .right && split.pairingIssue == nil, "physical halves use their existing side in a shared player")
+
         if CommandLine.arguments.count > 1 {
             let dir = URL(fileURLWithPath: CommandLine.arguments[1])
             try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

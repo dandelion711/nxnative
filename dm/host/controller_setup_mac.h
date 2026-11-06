@@ -44,16 +44,19 @@ static int cs_send(int fd, NSDictionary *message) {
     return 1;
 }
 
-static int cs_run(int fd, cs_identify_fn signal) {
+static void (^cs_registry_refresh)(void);
+static int cs_run_registry(int fd, NSArray *(^rows)(void), BOOL (^identify)(NSString *), void (^prepare)(void), NSString *(^accept)(NSDictionary *)) {
     @autoreleasepool {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
         [NSApp finishLaunching];   // initialize the Mac application services used by GameController, without a game window
+        if (prepare) prepare();
         int no_sigpipe = 1; setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof no_sigpipe);
         __block int done = 0, start = 0;
         void (^snapshot)(void) = ^{
-            if (!cs_send(fd, @{@"controllers": cs_update(GCController.controllers)})) done = 1;
+            if (!cs_send(fd, @{@"controllers": rows()})) done = 1;
         };
+        cs_registry_refresh=snapshot;
         NSMutableArray *observers = [NSMutableArray new];
         for (NSString *name in @[GCControllerDidConnectNotification, GCControllerDidDisconnectNotification])
             [observers addObject:[NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; snapshot(); }]];
@@ -70,14 +73,14 @@ static int cs_run(int fd, cs_identify_fn signal) {
                 if (line.location == NSNotFound) return;
                 id message = [NSJSONSerialization JSONObjectWithData:[buffer subdataWithRange:NSMakeRange(0, line.location)] options:0 error:NULL];
                 [buffer replaceBytesInRange:NSMakeRange(0, NSMaxRange(line)) withBytes:NULL length:0];
-                cs_update(GCController.controllers);
+                (void)rows();
                 if ([message isKindOfClass:NSDictionary.class] && [message[@"identify"] isKindOfClass:NSString.class]) {
                     NSString *key = message[@"identify"];
-                    BOOL ok = cs_identify(key, signal);
+                    BOOL ok = identify(key);
                     if (!cs_send(fd, @{@"identified": key, @"ok": @(ok)})) done = 1;
                     continue;
                 }
-                NSString *error = [message isKindOfClass:NSDictionary.class] ? cs_accept(message) : @"Invalid launch request.";
+                NSString *error = [message isKindOfClass:NSDictionary.class] ? (accept ? accept(message) : cs_accept(message)) : @"Invalid launch request.";
                 start = error == nil;
                 cs_send(fd, error ? @{@"error": error} : @{@"started": @YES});
                 done = 1;
@@ -89,8 +92,14 @@ static int cs_run(int fd, cs_identify_fn signal) {
         // a game or creating its window until Play arrives from the wrapper's launch UI.
         while (!done) CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
         for (id observer in observers) [NSNotificationCenter.defaultCenter removeObserver:observer];
+        cs_registry_refresh=nil;
         dispatch_source_cancel(source);
         close(fd);
         return start;
     }
+}
+
+static int cs_run(int fd, cs_identify_fn signal) {
+    return cs_run_registry(fd, ^{ return cs_update(GCController.controllers); },
+        ^BOOL(NSString *key) { return cs_identify(key,signal); }, nil, nil);
 }

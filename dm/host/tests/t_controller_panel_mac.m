@@ -184,6 +184,15 @@ int main(int argc, char **argv) { @autoreleasepool {
     if (argc > 1) capture(ui.panel.window, [@(argv[1]) stringByAppendingPathComponent:@"in-game-many.png"]);
     [ui.panel.window performClose:nil]; settle(^BOOL { return ui.panel == nil; });
     assert(opened == closed);
+    devices=@[@{@"id":@"physical-l",@"name":@"Joy-Con (L)",@"physicalSide":@"left"},@{@"id":@"physical-r",@"name":@"Joy-Con (R)",@"physicalSide":@"right"}];
+    active=@[@{@"id":@"physical-l",@"player":@1,@"style":@"pair",@"role":@"left"},@{@"id":@"physical-r",@"player":@1,@"style":@"pair",@"role":@"right"}];
+    game=(dm_controller_requirements){0x1f,0xff,NO};
+    [ui openMinimum:1 maximum:1 completion:nil];
+    assert(ui.panel.applyButton.enabled && [ui.panel.drafts[@"physical-l"][@"player"] intValue]==1 && [ui.panel.drafts[@"physical-r"][@"player"] intValue]==1);
+    DmControllerPopup *leftRole=popup(ui.panel.window.contentView,@"role.physical-l");
+    assert(leftRole.numberOfItems==1 && [leftRole.selectedItem.representedObject isEqual:@"left"]);
+    [ui.panel cancel:nil]; settle(^BOOL { return ui.panel==nil; });
+
     atomic_store(&finished, 0);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ answer = [ui requestMinimum:1 maximum:8]; atomic_store(&finished, 1); });
     settle(^BOOL { return ui.panel != nil; }); [parent close];

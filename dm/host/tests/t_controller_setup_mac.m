@@ -43,6 +43,20 @@ int main(int argc, char **argv) { @autoreleasepool {
     assert(cs_accept(@{@"choices": @[@{@"id": bid, @"player": @1, @"style": @"unknown"}], @"environment": @{}, @"explicit": @YES}));
     assert(!cs_accept(@{@"choices": @[@{@"id": bid, @"player": @0, @"style": @"right"}], @"environment": @{}, @"explicit": @YES}));
     assert(cs_player((id)b, &style) == -1);
+    // Transport owners need no GC profile. Metadata is display-only and the
+    // connection object remains the identity through reordering and handoff.
+    NSObject *rawLeft=[NSObject new], *rawRight=[NSObject new];
+    NSArray *rawSources=@[@{@"owner":rawLeft,@"name":@"Joy-Con (L)",@"physicalSide":@"left"},@{@"owner":rawRight,@"name":@"Joy-Con (R)",@"physicalSide":@"right"}];
+    NSArray *rawRows=cs_update_sources(rawSources);
+    NSString *rawL=rawRows[0][@"id"], *rawR=rawRows[1][@"id"];
+    assert(!rawRows[0][@"owner"] && [rawRows[0][@"physicalSide"] isEqual:@"left"]);
+    NSArray *rawReordered=cs_update_sources(@[rawSources[1],rawSources[0]]);
+    assert([rawReordered[0][@"id"] isEqual:rawR] && [rawReordered[1][@"id"] isEqual:rawL]);
+    NSArray *paired=@[@{@"id":rawL,@"player":@1,@"style":@"pair",@"role":@"left"},@{@"id":rawR,@"player":@1,@"style":@"pair",@"role":@"right"}];
+    assert(!cs_accept(@{@"choices":paired,@"environment":@{},@"explicit":@YES}));
+    assert(cs_source_player(rawLeft,&style)==0 && style==DM_STYLE_PAIR);
+    assert(cs_accept(@{@"choices":@[@{@"id":rawL,@"player":@1,@"style":@"pair",@"role":@"right"}],@"environment":@{},@"explicit":@YES}));
+    cs_update_sources(@[rawSources[0]]); assert(!cs_devices[rawR] && cs_devices[rawL]==rawLeft);
     puts("controller registry: OK");
     return 0;
 } }

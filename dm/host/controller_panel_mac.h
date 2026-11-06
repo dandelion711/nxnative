@@ -225,7 +225,10 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
     for (NSDictionary *row in self.rows) {
         NSString *key = row[@"id"]; if (next[key]) continue;
         NSMutableDictionary *choice = [seed[key] mutableCopy] ?: [@{@"id": key, @"player": @(-1), @"style": @"auto"} mutableCopy];
-        if ([choice[@"player"] intValue] > 0 && [used containsObject:choice[@"player"]]) choice[@"player"] = @0;
+        if ([choice[@"player"] intValue] > 0 && [used containsObject:choice[@"player"]]) {
+            BOOL complement=NO; for (NSDictionary *peer in next.allValues) if ([peer[@"player"] isEqual:choice[@"player"]] && cs_can_share(peer,choice)) complement=YES;
+            if (!complement) choice[@"player"]=@0;
+        }
         if ([choice[@"player"] intValue] > 0) [used addObject:choice[@"player"]];
         next[key] = choice;
     }
@@ -242,7 +245,11 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
         NSString *style = controller_recommended_style(self.displayedRequirements.styles, [row[@"player"] intValue] - 1);
         if (style) {
             NSMutableDictionary *choice = [self.drafts[key] mutableCopy];
-            choice[@"style"] = style; self.drafts[key] = choice;
+            choice[@"style"] = style;
+            for (NSDictionary *device in self.rows) if ([device[@"id"] isEqual:key] && device[@"physicalSide"] && [style isEqual:@"pair"]) {
+                choice[@"role"]=device[@"physicalSide"]; choice[@"player"]=row[@"player"];
+            }
+            self.drafts[key] = choice;
         }
     }
     NSMutableDictionary *resolved = [NSMutableDictionary new];
@@ -308,8 +315,8 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
             DmControllerPopup *role=[[DmControllerPopup alloc] initWithFrame:NSZeroRect pullsDown:NO];
             role.deviceID=key; role.roleChoice=YES; role.identifier=[@"role." stringByAppendingString:key];
             NSArray *titles=@[@"One controller",@"Left controller",@"Right controller"], *values=@[@"both",@"left",@"right"];
-            for (NSUInteger i=0;i<3;i++) { [role addItemWithTitle:titles[i]]; role.lastItem.representedObject=values[i]; }
-            [role selectItemAtIndex:cs_role(choice)]; role.target=self; role.action=@selector(choiceChanged:);
+            for (NSUInteger i=0;i<3;i++) if (!device[@"physicalSide"] || [device[@"physicalSide"] isEqual:values[i]]) { [role addItemWithTitle:titles[i]]; role.lastItem.representedObject=values[i]; if ([values[i] isEqual:choice[@"role"] ?: @"both"]) [role selectItem:role.lastItem]; }
+ role.target=self; role.action=@selector(choiceChanged:);
             NSStackView *field=[self column:@[[self label:@"Pair input" size:11 weight:NSFontWeightMedium],role] spacing:5];
             [content addArrangedSubview:field]; [field.widthAnchor constraintEqualToAnchor:content.widthAnchor].active=YES;
             if (!cs_role(choice)) {
@@ -355,6 +362,10 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
         choice[@"role"]=role;
     } else if (sender.styleChoice) {
         choice[@"style"] = sender.selectedItem.representedObject;
+        for (NSDictionary *device in self.rows) if ([device[@"id"] isEqual:key] && device[@"physicalSide"] && [choice[@"style"] isEqual:@"pair"]) {
+            choice[@"role"]=device[@"physicalSide"];
+            if ([choice[@"player"] intValue]<=0) for (NSDictionary *resolved in self.resolved) if ([resolved[@"id"] isEqual:key]) choice[@"player"]=resolved[@"player"];
+        }
         if (![choice[@"style"] isEqual:@"pair"]) {
             choice[@"role"]=@"both";
             for (NSString *other in self.drafts.allKeys) if (![other isEqual:key] && [choice[@"player"] intValue]>0 && [self.drafts[other][@"player"] isEqual:choice[@"player"]]) {

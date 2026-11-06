@@ -26,10 +26,10 @@ static NSString *ios_validate_overrides(NSArray *choices, NSDictionary **accepte
 }
 
 static void ios_route(dm_ios_routes *plan, NSArray<NSMutableArray<GCController *> *> *sources,
-                      GCController *controller, int slot, NSDictionary *choice) {
+                      id controller, NSString *name, int slot, NSDictionary *choice) {
     if (slot < 0) return;
     if (!sources[slot].count)
-        pad_slot_assign(&plan->slots, (__bridge const void *)controller, controller.vendorName.UTF8String ?: "", slot);
+        pad_slot_assign(&plan->slots, (__bridge const void *)controller, name.UTF8String ?: "", slot);
     [sources[slot] addObject:controller];
     if (choice) {
         plan->styles[slot] = ios_style(choice[@"style"]);
@@ -48,7 +48,7 @@ static dm_ios_routes ios_plan_routes_reserved(pad_slots previous, NSArray *rows,
         NSString *key = row[@"id"];
         NSDictionary *choice = choices[key];
         int player = [choice[@"player"] intValue];
-        if (player > 0) ios_route(&plan, sources, cs_devices[key], player - 1, choice);
+        if (player > 0) ios_route(&plan, sources, cs_devices[key], row[@"name"], player - 1, choice);
     }
 
     // Retain existing slots for connected devices. In legacy merge mode, the
@@ -57,9 +57,9 @@ static dm_ios_routes ios_plan_routes_reserved(pad_slots previous, NSArray *rows,
         NSString *key = row[@"id"];
         NSDictionary *choice = choices[key];
         if ((choice && [choice[@"player"] intValue] != -1) || (merge && !choice && !(plan.manual & 1u))) continue;
-        GCController *controller = cs_devices[key];
+        id controller = cs_devices[key];
         int slot = pad_slot_of(&previous, (__bridge const void *)controller);
-        if (slot >= 0 && !plan.slots.owner[slot]) ios_route(&plan, sources, controller, slot, choice);
+        if (slot >= 0 && !plan.slots.owner[slot]) ios_route(&plan, sources, controller, row[@"name"], slot, choice);
     }
 
     // Devices with a type override and an automatic player need their own slot.
@@ -68,14 +68,14 @@ static dm_ios_routes ios_plan_routes_reserved(pad_slots previous, NSArray *rows,
         NSString *key = row[@"id"];
         NSDictionary *choice = choices[key];
         if (choice && [choice[@"player"] intValue] != -1) continue;
-        GCController *controller = cs_devices[key];
+        id controller = cs_devices[key];
         const void *owner = (__bridge const void *)controller;
         if (pad_slot_of(&plan.slots, owner) >= 0) continue;
         if (merge && !choice && !(plan.manual & 1u)) {
-            ios_route(&plan, sources, controller, 0, nil);
+            ios_route(&plan, sources, controller, row[@"name"], 0, nil);
         } else {
-            int slot = pad_slot_take(&plan.slots, owner, controller.vendorName.UTF8String ?: "");
-            ios_route(&plan, sources, controller, slot, choice);
+            int slot = pad_slot_take(&plan.slots, owner, [row[@"name"] UTF8String] ?: "");
+            ios_route(&plan, sources, controller, row[@"name"], slot, choice);
         }
     }
     return plan;

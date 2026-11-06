@@ -19,6 +19,13 @@ enum GameControllerStyle: String, CaseIterable, Identifiable {
 struct LauncherController: Identifiable, Decodable {
     let id: String
     let name: String
+    let automaticPlayer: Int?
+    let reservedPlayers: [Int]?
+    let physicalSide: String?
+    init(id: String, name: String, automaticPlayer: Int? = nil, reservedPlayers: [Int]? = nil, physicalSide: String? = nil) {
+        self.id=id; self.name=name; self.automaticPlayer=automaticPlayer
+        self.reservedPlayers=reservedPlayers; self.physicalSide=physicalSide
+    }
 }
 
 enum ControllerPairRole: String, CaseIterable, Identifiable {
@@ -116,11 +123,14 @@ final class ControllerSettingsModel: ObservableObject {
             guard let p = choice.player, p > 0 else { return nil }
             return p
         })
+        let fixed=used
+        used.formUnion(controllers.flatMap { $0.reservedPlayers ?? [] }.filter { !fixed.contains($0) })
         for device in controllers {
             let choice = choices[device.id] ?? ControllerChoice()
             let player: Int?
             if choice.player == -1 {
-                player = (1...8).first { !used.contains($0) }
+                let preferred=device.automaticPlayer
+                player = preferred.flatMap { used.contains($0) ? nil : $0 } ?? (1...8).first { !used.contains($0) }
                 if let player { used.insert(player) }
             } else { player = choice.player }
             if device.id == id { return player }
@@ -167,6 +177,7 @@ final class ControllerSettingsModel: ObservableObject {
         guard choices[id] != nil else { return }
         if style != .pair { chooseRole(.both,for:id) }
         choices[id]?.style = style
+        if style == .pair, let side=controllers.first(where: { $0.id==id })?.physicalSide, let role=ControllerPairRole(rawValue:side) { chooseRole(role,for:id) }
     }
 }
 
@@ -211,7 +222,7 @@ struct ControllerSettingsFields: View {
                     }
                     if model.choices[controller.id]?.style == .pair {
                         Picker("Pair input", selection: Binding(get: { model.choices[controller.id]?.role ?? .both }, set: { model.chooseRole($0,for:controller.id) })) {
-                            ForEach(ControllerPairRole.allCases) { Text($0.title).tag($0) }
+                            ForEach(ControllerPairRole.allCases.filter { controller.physicalSide == nil || $0.rawValue == controller.physicalSide }) { Text($0.title).tag($0) }
                         }
                         if model.choices[controller.id]?.role == .both {
                             Text("Both Joy-Cons share this controller's motion. Separate hand movements need two controllers.").font(.callout).foregroundStyle(.secondary)
