@@ -566,6 +566,7 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
 static dm_ios_routes g_routes;
 static NSArray<GCController *> *g_sources[DM_PLAYERS];
 static NSDictionary *g_overrides;
+static NSArray<NSNumber *> *g_source_roles[DM_PLAYERS];
 
 static BOOL merge_automatic_pads(void) {
     const char *value = getenv("DM_PAD_MERGE");
@@ -579,7 +580,7 @@ NSArray<NSDictionary<NSString *, id> *> *dm_ios_controller_snapshot(void) {
         NSString *key = device[@"id"];
         NSDictionary *choice = g_overrides[key];
         [rows addObject:@{@"id": key, @"name": device[@"name"],
-            @"player": choice[@"player"] ?: @(-1), @"style": choice[@"style"] ?: @"auto"}];
+            @"player": choice[@"player"] ?: @(-1), @"style": choice[@"style"] ?: @"auto", @"role": choice[@"role"] ?: @"both"}];
     }
     return rows;
 }
@@ -588,6 +589,7 @@ NSString *dm_ios_controller_configure(NSArray<NSDictionary<NSString *, id> *> *c
     cs_update(GCController.controllers);
     NSDictionary *next = nil;
     NSString *error = ios_validate_overrides(choices, &next);
+    if (!error) error=cs_pair_error(choices);
     if (!error) g_overrides = next;
     return error;
 }
@@ -601,9 +603,10 @@ static void read_pad(GCExtendedGamepad *g) {
     if (atomic_load(&g_configuring)) return;
     GCController *controller = g.controller;
     int p = pad_slot_of(&g_routes.slots, (__bridge const void *)controller);
-    if (p < 0 && [g_sources[0] containsObject:controller]) p = 0;
+    if (p < 0) for (int slot=0;slot<DM_PLAYERS;slot++) if ([g_sources[slot] containsObject:controller]) { p=slot; break; }
     if (p < 0) return;
-    dm_haptics_apple_controller(p, g.controller);
+    int role=cs_device_role(controller,g_overrides);
+    if (!role) dm_haptics_apple_controller(p, g.controller);
     _Static_assert(DM_BTN_A == 1u << B_A && DM_BTN_B == 1u << B_B && DM_BTN_X == 1u << B_X && DM_BTN_Y == 1u << B_Y, "face button bits");
     uint64_t m = dm_pad_face(g);   // by position, a Nintendo pad by its labels
     #define K(btn, bit) if (btn.isPressed) m |= 1ull << bit
@@ -612,7 +615,8 @@ static void read_pad(GCExtendedGamepad *g) {
     if (g.leftThumbstickButton) K(g.leftThumbstickButton, B_LS); if (g.rightThumbstickButton) K(g.rightThumbstickButton, B_RS);
     K(g.dpad.left, B_LEFT); K(g.dpad.up, B_UP); K(g.dpad.right, B_RIGHT); K(g.dpad.down, B_DOWN);
     #undef K
-    dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
+    if (role) dm_pad_set_side(p,role,m,axis(g.leftThumbstick.xAxis.value),axis(g.leftThumbstick.yAxis.value));
+    else dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
 }
 // Home and Capture: without this iOS takes them as system gestures (Home opens the Games overlay, Capture a screenshot); the app gives them no function
 static void pad_keep_system_buttons(GCController *c) {
@@ -646,12 +650,12 @@ static NSDictionary *route_status(dm_ios_routes plan, NSArray<NSArray<GCControll
         uint32_t idBit = 1u << slot;
         if (!style && !slot && handheld) { style = 2u; idBit = 1u << 8; }
         if (!style) style = DM_STYLE_PRO;
-        BOOL accepted = (styles & style) && ((ids & idBit) || (!slot && !plan.styles[0]));
+        BOOL accepted = (!plan.sides[p] || plan.sides[p]==3) && (styles & style) && ((ids & idBit) || (!slot && !plan.styles[0]));
         for (GCController *controller in sources[p]) {
             NSString *key = [cs_devices allKeysForObject:controller].firstObject;
             NSString *automaticStyle = !slot && handheld ? @"handheld" : @"pro";
             routes[key] = @{@"player": @(slot + 1), @"ready": @(accepted), @"automaticStyle": automaticStyle,
-                @"recommendation": controller_recommended_style(styles, slot) ?: @""};
+                @"recommendation": controller_recommended_style(styles, slot) ?: @"", @"role": g_overrides[key][@"role"] ?: @"both", @"pairComplete": @(!plan.sides[p] || plan.sides[p]==3)};
             if (accepted) ready |= 1u << slot;
         }
     }
@@ -666,6 +670,7 @@ static NSDictionary *route_status(dm_ios_routes plan, NSArray<NSArray<GCControll
     if (inGame) dm_ios_controller_limits(&minimum, &maximum);
     return @{@"minimum": @(minimum), @"maximum": @(maximum), @"styles": types, @"players": players,
         @"requiredStyle": controller_required_style(styles) ?: @"",
+        @"recommendedStyles": styles==(DM_STYLE_LEFT|DM_STYLE_RIGHT) ? @[@"left",@"right"] : controller_required_style(styles) ? @[controller_required_style(styles)] : @[],
         @"ready": @(__builtin_popcount(ready) + touch), @"touch": @(touch), @"routes": routes};
 }
 
@@ -682,11 +687,17 @@ NSDictionary<NSString *, id> *dm_ios_controller_status(NSArray<NSDictionary<NSSt
 // Both hotplug and Apply use this transaction. Invalidate old callbacks before
 // attaching new ones, while keeping untouched devices' motion sources alive.
 static void publish_routes(dm_ios_routes plan, NSArray<NSMutableArray<GCController *> *> *sources) {
+    NSMutableArray *nextRoles=[NSMutableArray new];
+    for (int p=0;p<DM_PLAYERS;p++) {
+        NSMutableArray *roles=[NSMutableArray new];
+        for (GCController *c in sources[p]) [roles addObject:@(cs_device_role(c,g_overrides))];
+        [nextRoles addObject:roles];
+    }
     uint32_t layoutChanged = g_routes.manual ^ plan.manual, affected = layoutChanged;
     for (int p = 0; p < DM_PLAYERS; p++) {
         BOOL ownersChanged = (g_sources[p].count || sources[p].count) && ![g_sources[p] isEqualToArray:sources[p]];
-        if (g_routes.styles[p] != plan.styles[p]) layoutChanged |= 1u << p;
-        if (g_routes.styles[p] != plan.styles[p] || ownersChanged) affected |= 1u << p;
+        if (g_routes.styles[p] != plan.styles[p] || g_routes.sides[p]!=plan.sides[p]) layoutChanged |= 1u << p;
+        if (g_routes.styles[p] != plan.styles[p] || ownersChanged || ![(g_source_roles[p] ?: @[]) isEqual:nextRoles[p]]) affected |= 1u << p;
     }
     // Automatic hotplug has the same style notifications as dm_pad_players.
     // Only a manual layout change needs an additional old-style notification.
@@ -695,13 +706,17 @@ static void publish_routes(dm_ios_routes plan, NSArray<NSMutableArray<GCControll
     for (int p = 0; p < DM_PLAYERS; p++) if (affected >> p & 1) {
         for (GCController *controller in g_sources[p]) {
             controller.extendedGamepad.valueChangedHandler = nil;
-            dm_motion_detach(controller, p);
+            NSUInteger index=[g_sources[p] indexOfObjectIdenticalTo:controller];
+            int role=index<g_source_roles[p].count ? [g_source_roles[p][index] intValue] : 0;
+            dm_motion_detach_role(controller,p,role);
         }
         dm_haptics_apple_controller(p, nil);
     }
     g_routes = plan;
     for (int p = 0; p < DM_PLAYERS; p++) if (affected >> p & 1) {
         g_sources[p] = [sources[p] copy];
+        g_source_roles[p]=nextRoles[p];
+        dm_pad_pair_sources(p,plan.sides[p]!=0,plan.sides[p]);
         dm_pad_style(p, plan.styles[p], plan.styles[p] && !dm_pad_is_joycon(sources[p].firstObject));
         for (GCController *controller in sources[p]) {
             pad_keep_system_buttons(controller);
@@ -709,10 +724,16 @@ static void publish_routes(dm_ios_routes plan, NSArray<NSMutableArray<GCControll
                 (void)element;
                 read_pad(pad);
             };
-            dm_motion_attach(controller, p);
-            dm_haptics_apple_controller(p, controller);
+            int role=cs_device_role(controller,g_overrides);
+            dm_motion_attach_role(controller,p,role);
+            if (!role) dm_haptics_apple_controller(p, controller);
             read_pad(controller.extendedGamepad);
         }
+    }
+    for (int p=0;p<DM_PLAYERS;p++) if (plan.sides[p] && (affected >> p & 1)) {
+        GCController *left=nil,*right=nil;
+        for (GCController *c in sources[p]) { int role=cs_device_role(c,g_overrides); if (role==1) left=c; if (role==2) right=c; }
+        dm_haptics_apple_pair(p,left,right);
     }
     dm_pad_players_ios(pad_slot_mask(&plan.slots), plan.manual);
 }
@@ -723,6 +744,7 @@ NSString *dm_ios_controller_apply(NSArray<NSDictionary<NSString *, id> *> *choic
     NSDictionary *next = nil;
     NSString *error = ios_validate_overrides(choices, &next);
     if (error) return error;
+    error=cs_pair_error(choices); if (error) return error;
     NSArray *sources = new_sources();
     dm_ios_routes plan = ios_plan_routes(g_routes.slots, rows, next, merge_automatic_pads(), sources);
     dm_pad_reconfigure_begin();
@@ -780,7 +802,10 @@ void dm_gamepad_active(void) { dispatch_async(dispatch_get_main_queue(), ^{ for 
 void dm_gamepad_reset(void) {   // On resign active: release everything (a key held while switching away and released in background gets no "release")
     dispatch_async(dispatch_get_main_queue(), ^{ [g_view reset]; });
     pthread_mutex_lock(&g_mu); g_shake_btn = 0; pthread_mutex_unlock(&g_mu); publish();
-    for (int p = 0; p < DM_PLAYERS; p++) if (g_sources[p].count) dm_pad_set_player(p, 0, 0, 0, 0, 0);
+    for (int p = 0; p < DM_PLAYERS; p++) if (g_sources[p].count) {
+        if (g_routes.sides[p]) { dm_pad_set_side(p,1,0,0,0); dm_pad_set_side(p,2,0,0,0); }
+        else dm_pad_set_player(p, 0, 0, 0, 0, 0);
+    }
 }
 
 // Called by the UIKit coordinator. Keep system and physical input out of the

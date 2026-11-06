@@ -181,15 +181,19 @@ static home_quit g_hq;   // the Home button's hold and quit prompt (home_quit.h)
 static void pad_read(GCExtendedGamepad *g) {
     if (!g_input_on) return;
     hq_poll(); if (hq_blocks_input(g_hq.phase)) return;
-    int p = g_merge ? 0 : pad_slot_of(&g_slots, (__bridge const void *)g.controller); if (p < 0) return;
-    dm_haptics_apple_controller(p, g.controller);
+    int role=cs_explicit ? cs_device_role(g.controller,cs_choices) : 0;
+    int p = role ? cs_player(g.controller,NULL) : g_merge ? 0 : pad_slot_of(&g_slots, (__bridge const void *)g.controller); if (p < 0) return;
+    if (!role) dm_haptics_apple_controller(p, g.controller);
     uint64_t m = dm_pad_face(g);   // by position, a Nintendo pad by its labels
     #define K(btn, bit) if (btn.isPressed) m |= bit
     K(g.leftShoulder, DM_BTN_L); K(g.rightShoulder, DM_BTN_R); K(g.leftTrigger, DM_BTN_ZL); K(g.rightTrigger, DM_BTN_ZR);
     K(g.buttonMenu, DM_BTN_PLUS); K(g.buttonOptions, DM_BTN_MINUS); K(g.leftThumbstickButton, DM_BTN_LS); K(g.rightThumbstickButton, DM_BTN_RS);   // nil on pads without them: not pressed
     K(g.dpad.left, DM_BTN_LEFT); K(g.dpad.up, DM_BTN_UP); K(g.dpad.right, DM_BTN_RIGHT); K(g.dpad.down, DM_BTN_DOWN);
     #undef K
-    pad_set(p, m, pad_axis(g.leftThumbstick.xAxis.value), pad_axis(g.leftThumbstick.yAxis.value), pad_axis(g.rightThumbstick.xAxis.value), pad_axis(g.rightThumbstick.yAxis.value));
+    if (role) {
+        if (m || fabsf(g.leftThumbstick.xAxis.value)>.15f || fabsf(g.leftThumbstick.yAxis.value)>.15f) cursor_hide_for_input();
+        dm_pad_set_side(p,role,m,pad_axis(g.leftThumbstick.xAxis.value),pad_axis(g.leftThumbstick.yAxis.value));
+    } else pad_set(p, m, pad_axis(g.leftThumbstick.xAxis.value), pad_axis(g.leftThumbstick.yAxis.value), pad_axis(g.rightThumbstick.xAxis.value), pad_axis(g.rightThumbstick.yAxis.value));
 }
 // Home and Capture: without this macOS takes them as system gestures (Home opens the Games app). Capture has no function in the host, Home quits when it is held (hq_poll).
 // macOS 27 respects the claim when the Home button setting for apps lets the app decide (hq_log_setting names it in the log)
@@ -214,10 +218,13 @@ static int merge_pads_left(GCController *gone) {
     return 0;
 }
 // Called at start and on every connect / disconnect (gone: the controller that was just removed, nil on a connect)
+static BOOL controller_reapply_pairs(NSArray *now);
+static NSArray *controller_pair_devices;
 static void pads_changed(GCController *gone) {
     NSMutableArray<GCController *> *now = [GCController.controllers mutableCopy];
     if (gone) [now removeObject:gone];
     cs_update(now);
+    if (controller_reapply_pairs(now)) return;
     if (g_merge) {
         int any = 0;
         for (GCController *c in GCController.controllers) if (c.extendedGamepad && c != gone) {
@@ -456,9 +463,24 @@ static void pads_start(void) {
 static DmControllerUI *g_controller_ui;
 
 #include "controller_assignment_apple.h"
-static NSArray<GCController *> *controller_devices(void) { return GCController.controllers; }
+static NSArray<GCController *> *controller_devices(void) {
+    if (controller_pair_devices) return controller_pair_devices; return GCController.controllers; }
 static dm_controller_host controller_host(void) {
     return (dm_controller_host){&g_slots, g_held, &g_merge, &g_kbd_own, controller_devices, dm_opmode, pad_read, pad_keep_system_buttons, pro_players_changed};
+}
+static BOOL controller_reapply_pairs(NSArray *now) {
+    BOOL paired=NO;
+    for (NSDictionary *c in cs_choices.allValues) if (cs_role(c)) paired=YES;
+    for (int p=0;p<DM_PLAYERS;p++) if (cs_pair_left[p] || cs_pair_right[p]) paired=YES;
+    if (!cs_explicit || !paired) return NO;
+    NSMutableArray *devices=[NSMutableArray new];
+    for (GCController *c in now) if (c.extendedGamepad) [devices addObject:c];
+    controller_pair_devices=devices; cs_pair_reconciling=YES;
+    NSDictionary *state=controller_assignment_state(controller_host());
+    NSString *error=controller_assignment_apply(controller_host(),state[@"choices"],0,DM_PLAYERS,NULL);
+    cs_pair_reconciling=NO; controller_pair_devices=nil;
+    if (error) LOG("[RED] paired controller hotplug: %s",error.UTF8String);
+    controller_ui_refresh(); return YES;
 }
 static NSDictionary *controller_state(void) { return controller_assignment_state(controller_host()); }
 static dm_controller_requirements controller_requirements(void) { return controller_assignment_requirements(controller_host()); }

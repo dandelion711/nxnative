@@ -48,6 +48,23 @@ import Darwin
         expect(ProcessInfo.processInfo.environment == beforeEnv, "drafts do not change the host environment")
         expect(beforePrefs.isEqual(to: UserDefaults.standard.dictionaryRepresentation()), "drafts do not write preferences")
 
+        let pair = ControllerSettingsModel(); pair.update([a,b])
+        pair.chooseStyle(.pair,for:a.id); pair.chooseStyle(.pair,for:b.id)
+        pair.chooseRole(.left,for:a.id)
+        expect(pair.pairingIssue != nil && !pair.start(), "a half pair cannot start the game")
+        pair.chooseRole(.right,for:b.id); pair.choosePlayer(1,for:b.id)
+        expect(pair.choices[a.id]?.player == 1 && pair.choices[b.id]?.player == 1 && pair.pairingIssue == nil, "complementary roles share one player")
+        pair.chooseRole(.right,for:a.id)
+        expect(pair.choices[b.id]?.role == .left && pair.pairingIssue == nil, "swapping sides preserves the complete pair")
+        pair.chooseRole(.left,for:a.id)
+        pair.chooseRole(.both,for:a.id)
+        expect(pair.choices[b.id]?.player == -1 && pair.choices[b.id]?.role == .both && pair.pairingIssue == nil, "single-pad pair returns the second controller to automatic")
+
+        pair.update([a,b,c]); pair.chooseRole(.left,for:a.id)
+        pair.chooseRole(.right,for:b.id); pair.choosePlayer(1,for:b.id)
+        pair.chooseStyle(.pair,for:c.id); pair.chooseRole(.left,for:c.id); pair.choosePlayer(1,for:c.id)
+        expect(pair.choices[a.id]?.player == -1 && pair.choices[a.id]?.role == .both && pair.choices[b.id]?.player == 1 && pair.choices[c.id]?.player == 1 && pair.pairingIssue == nil, "a third source replaces only the conflicting side")
+
         if CommandLine.arguments.count > 1 {
             let dir = URL(fileURLWithPath: CommandLine.arguments[1])
             try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

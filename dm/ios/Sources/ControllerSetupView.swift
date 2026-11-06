@@ -19,13 +19,25 @@ struct ControllerSetupView: View {
         }
     }
 
+    private enum PairRole: String, CaseIterable, Identifiable {
+        case both, left, right
+        var id: Self { self }
+        var title: String {
+            switch self {
+            case .both: String(localized: "One controller")
+            case .left: String(localized: "Left controller")
+            case .right: String(localized: "Right controller")
+            }
+        }
+    }
     private struct Device: Identifiable, Equatable {
         let id: String
         let name: String
         var player: Int
         var style: Style
+        var role: PairRole = .both
 
-        var choice: [String: Any] { ["id": id, "player": player, "style": style.rawValue] }
+        var choice: [String: Any] { ["id": id, "player": player, "style": style.rawValue, "role": role.rawValue] }
     }
 
     private struct Route: Equatable {
@@ -40,6 +52,7 @@ struct ControllerSetupView: View {
         let maximum: Int
         let styles: [Style]
         let requiredStyle: Style?
+        let recommendedStyles: [Style]
         let players: [Int]
         let ready: Int
         let touch: Bool
@@ -50,6 +63,7 @@ struct ControllerSetupView: View {
             maximum = status["maximum"] as? Int ?? 8
             styles = (status["styles"] as? [String] ?? []).compactMap(Style.init(rawValue:))
             requiredStyle = (status["requiredStyle"] as? String).flatMap(Style.init(rawValue:))
+            recommendedStyles = (status["recommendedStyles"] as? [String])?.compactMap(Style.init(rawValue:)) ?? requiredStyle.map { [$0] } ?? []
             players = status["players"] as? [Int] ?? []
             ready = status["ready"] as? Int ?? 0
             touch = status["touch"] as? Bool ?? false
@@ -104,6 +118,14 @@ struct ControllerSetupView: View {
                                                                 set: { setStyle($0, for: device.id) })) {
                             ForEach(Style.allCases) { Text(styleLabel($0, for: device.id)).tag($0) }
                         }
+                        if device.style == .pair {
+                            Picker("Pair input", selection: Binding(get: { devices.first { $0.id == device.id }?.role ?? .both }, set: { setRole($0,for:device.id) })) {
+                                ForEach(PairRole.allCases) { Text($0.title).tag($0) }
+                            }
+                            if device.role == .both {
+                                Text("Both Joy-Cons share this controller's motion. Separate hand movements need two controllers.").font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
                         Button(signaled.contains(device.id) ? "Identify • signal sent" : "Identify") {
                             if dm_ios_controller_identify(device.id) {
                                 signaled.insert(device.id)
@@ -122,6 +144,7 @@ struct ControllerSetupView: View {
                         Text(controllerHeading(device, index: index))
                     }
                 }
+                if pairingIssue { Section { Text("Assign a left and a right controller to the same player to complete the pair.").foregroundStyle(.red) } }
                 if !inGame, !devices.isEmpty {
                     Section {
                         Text("Changes apply to this session.").font(.footnote).foregroundStyle(.secondary)
@@ -137,7 +160,7 @@ struct ControllerSetupView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { finish(false) } }
                 ToolbarItem(placement: .confirmationAction) {
                     if !inGame {
-                        Button("Done") { save(devices.map(\.choice)) }.disabled(devices.isEmpty)
+                        Button("Done") { save(devices.map(\.choice)) }.disabled(devices.isEmpty || pairingIssue)
                     }
                 }
             }
@@ -209,7 +232,7 @@ struct ControllerSetupView: View {
             Spacer(minLength: 0)
             Button("Apply") { save(devices.map(\.choice)) }
                 .buttonStyle(.borderedProminent)
-                .disabled(!status.canApply)
+                .disabled(!status.canApply || pairingIssue)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
@@ -228,7 +251,7 @@ struct ControllerSetupView: View {
         for index in devices.indices {
             let id = devices[index].id
             guard recommendationSeen.insert(id).inserted,
-                  let route = readiness.routes[id], !route.ready,
+                  let route = readiness.routes[id], !route.ready, devices[index].role == .both,
                   let recommended = route.recommendation else { continue }
             // Accepted choices and later user edits stay intact. Only an
             // incompatible initial draft receives a game-specific suggestion.
@@ -246,7 +269,7 @@ struct ControllerSetupView: View {
             guard let id = row["id"] as? String, let name = row["name"] as? String,
                   let player = row["player"] as? Int, let token = row["style"] as? String,
                   let style = Style(rawValue: token) else { return nil }
-            return Device(id: id, name: name, player: player, style: style)
+            return Device(id: id, name: name, player: player, style: style, role: PairRole(rawValue:row["role"] as? String ?? "both") ?? .both)
         }
         devices = snapshot.map { previous[$0.id] ?? $0 }
         updateReadiness()
@@ -276,7 +299,7 @@ struct ControllerSetupView: View {
             let title = route.automaticStyle == "handheld" ? String(localized: "Handheld") : Style(rawValue: route.automaticStyle)?.title ?? style.title
             return "\(title) • " + String(localized: "Automatic")
         }
-        if inGame, readiness?.requiredStyle == style {
+        if inGame, readiness?.recommendedStyles.contains(style) == true {
             return style.title + " • " + String(localized: "Recommended")
         }
         return style.title
@@ -287,15 +310,45 @@ struct ControllerSetupView: View {
 
     private func setStyle(_ style: Style, for id: String) {
         guard let index = devices.firstIndex(where: { $0.id == id }) else { return }
+        if style != .pair { setRole(.both,for:id) }
         devices[index].style = style
     }
 
     private func assign(_ player: Int, to id: String) {
         guard let index = devices.firstIndex(where: { $0.id == id }) else { return }
-        if player > 0, let other = devices.firstIndex(where: { $0.player == player && $0.id != id }) {
-            devices[other].player = devices[index].player
+        if player > 0 {
+            let others = devices.indices.filter { $0 != index && devices[$0].player == player }
+            for other in others {
+                let shares = devices[index].style == .pair && devices[other].style == .pair && devices[index].role != .both && devices[other].role != .both && devices[index].role != devices[other].role
+                if !shares {
+                    let swaps = others.count == 1 && devices[index].role == .both && devices[other].role == .both
+                    devices[other].player = swaps ? devices[index].player : -1
+                    if !swaps { devices[other].role = .both }
+                }
+            }
         }
         devices[index].player = player
+        if player <= 0 { devices[index].role = .both }
+    }
+
+    private var pairingIssue: Bool {
+        var groups: [Int: Set<PairRole>] = [:]
+        for d in devices where d.role != .both {
+            if d.player <= 0 { return true }
+            groups[d.player,default: []].insert(d.role)
+        }
+        return groups.values.contains { $0 != Set([.left,.right]) }
+    }
+    private func setRole(_ role: PairRole, for id: String) {
+        guard let index=devices.firstIndex(where: { $0.id == id }) else { return }
+        if role != .both && devices[index].player <= 0 { devices[index].player = readiness?.routes[id]?.player ?? 1 }
+        let p=devices[index].player, old=devices[index].role
+        for i in devices.indices where i != index && p>0 && devices[i].player == p {
+            if role == .both || devices[i].style != .pair || devices[i].role == .both || (devices[i].role == role && old == .both) {
+                devices[i].player = -1; devices[i].role = .both
+            } else if devices[i].role == role { devices[i].role = old }
+        }
+        devices[index].role=role
     }
 
     private func save(_ choices: [[String: Any]]) {

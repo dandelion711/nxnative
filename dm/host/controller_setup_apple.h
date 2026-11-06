@@ -20,22 +20,29 @@ static NSArray *cs_update(NSArray<GCController *> *devices) {
     return rows;
 }
 
+static int cs_device_role(GCController *c, NSDictionary *choices) {
+    NSString *key=[cs_devices allKeysForObject:c].firstObject;
+    return key ? cs_role(choices[key]) : 0;
+}
 // Shared by startup and live Apply. Neither UI may partially publish an invalid draft.
 static NSString *cs_validate_choices(NSArray *choices, NSDictionary **accepted) {
     if (![choices isKindOfClass:NSArray.class]) return @"Invalid controller choices.";
     NSMutableDictionary *next = [NSMutableDictionary new];
-    uint32_t players = 0;
+    NSMutableDictionary *players = [NSMutableDictionary new];
     for (id row in choices) {
         if (![row isKindOfClass:NSDictionary.class]) return @"Invalid controller choice.";
         NSString *key = row[@"id"], *style = row[@"style"];
         NSNumber *player = row[@"player"];
         if (![key isKindOfClass:NSString.class] || ![style isKindOfClass:NSString.class] || ![player isKindOfClass:NSNumber.class] ||
             player.doubleValue != player.intValue || player.intValue < -1 || player.intValue > DM_PLAYERS || (!cs_style(style) && ![style isEqual:@"auto"]) || next[key]) return @"Invalid controller assignment.";
+        id role = row[@"role"];
+        if (role && (![role isKindOfClass:NSString.class] || ![@[@"both",@"left",@"right"] containsObject:role])) return @"Invalid pair role.";
+        if (cs_role(row) && (![style isEqual:@"pair"] || player.intValue <= 0)) return @"Choose a player and Joy-Con pair before assigning a pair role.";
         if (!cs_devices[key]) return @"A controller disconnected. Choose a connected controller and try again.";
         if (player.intValue > 0) {
-            uint32_t bit = 1u << (player.intValue - 1);
-            if (players & bit) return @"Two controllers cannot use the same player.";
-            players |= bit;
+            NSArray *group=players[player] ?: @[];
+            if (group.count && (group.count!=1 || !cs_can_share(group[0],row))) return @"A shared player needs one left and one right controller set to Joy-Con pair.";
+            players[player]=[group arrayByAddingObject:row];
         }
         next[key] = [row copy];
     }

@@ -16,6 +16,7 @@ static NSString *cs_accept(NSDictionary *request) {
     NSDictionary *next = nil;
     NSString *error = cs_validate_choices(request[@"choices"], &next);
     if (error) return error;
+    error=cs_pair_error(request[@"choices"]); if (error) return error;
     for (id key in environment) {
         id value = environment[key];
         if (![key isKindOfClass:NSString.class] || ![value isKindOfClass:NSString.class] || ![key length] || [key containsString:@"="] ||

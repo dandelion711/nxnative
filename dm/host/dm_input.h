@@ -29,6 +29,12 @@ enum { DM_STYLE_AUTO = 0, DM_STYLE_PRO = 1, DM_STYLE_PAIR = 4, DM_STYLE_LEFT = 8
 // Called before guest startup, or inside a live reconfiguration transaction. Device ownership stays with the front end.
 // follow_hold adapts a full-size pad assigned as a single Joy-Con to the game's hold type.
 void dm_pad_style(int player, uint32_t style, int follow_hold);
+// Explicit two-source Joy-Con pair. Role 1 is left, 2 right; mask 0 disables grouping.
+// A grouped player is connected only with both roles present. Single-pad pair emulation stays shared.
+void dm_pad_pair_sources(int player, int grouped, uint32_t sides);
+void dm_pad_set_side(int player, int role, uint64_t buttons, int32_t lx, int32_t ly);
+void dm_motion_set_side_generation(int player, int role, uint64_t generation, const float acc[3], const float rot[3]);
+void dm_motion_clear_side(int player, int role);
 void dm_pad_explicit(int enabled);   // explicit player slots never merge into player 1
 uint32_t dm_pad_configured_style(int player);
 void dm_pad_supported(uint32_t *styles, uint32_t *ids);

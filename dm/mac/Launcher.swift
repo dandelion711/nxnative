@@ -68,7 +68,7 @@ struct LauncherView: View {
                 Spacer()
                 Button("Quit") { done(false) }
                 Button("Play") { done(true) }.keyboardShortcut(.defaultAction)
-                    .disabled(!controllers.ready || controllers.error != nil)
+                    .disabled(!controllers.ready || controllers.error != nil || controllers.pairingIssue != nil)
             }
             .padding(20)
         }

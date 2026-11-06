@@ -31,6 +31,7 @@ static inline int controller_ready_players(dm_controller_requirements game, NSAr
     for (NSDictionary *choice in choices) {
         int player = [choice[@"player"] intValue];
         if (player == 1) firstAssigned = YES;
+        if (choice[@"pairComplete"] && ![choice[@"pairComplete"] boolValue]) continue;
         BOOL slotSupported = player == 1 && [choice[@"style"] isEqual:@"handheld"]
             ? (game.ids & (1u << 8)) != 0 : controller_player_supported(game, player);
         if (slotSupported && (game.styles & cs_style(choice[@"style"])) && !(counted >> (player - 1) & 1)) {
@@ -59,4 +60,26 @@ static inline NSString *controller_recommended_style(uint32_t supported, int pla
 static inline NSString *controller_required_style(uint32_t supported) {
     if (!supported || (supported & (supported - 1u))) return nil;
     return controller_recommended_style(supported, 0);
+}
+
+static inline BOOL controller_style_recommended(uint32_t supported, uint32_t style) {
+    return (supported == (DM_STYLE_LEFT|DM_STYLE_RIGHT) && (style==DM_STYLE_LEFT || style==DM_STYLE_RIGHT)) ||
+        (style && supported==style && controller_required_style(supported)!=nil);
+}
+
+static int cs_role(NSDictionary *choice) {
+    return [choice[@"role"] isEqual:@"left"] ? 1 : [choice[@"role"] isEqual:@"right"] ? 2 : 0;
+}
+static BOOL cs_can_share(NSDictionary *a, NSDictionary *b) {
+    return [a[@"style"] isEqual:@"pair"] && [b[@"style"] isEqual:@"pair"] && cs_role(a) && cs_role(b) && cs_role(a)!=cs_role(b);
+}
+static NSString *cs_pair_error(NSArray *choices) {
+    uint32_t sides[DM_PLAYERS]={0};
+    for (NSDictionary *c in choices) {
+        int p=[c[@"player"] intValue]-1, role=cs_role(c);
+        if (p>=0 && p<DM_PLAYERS && role) sides[p] |= 1u << (role-1);
+    }
+    for (int p=0;p<DM_PLAYERS;p++) if (sides[p] && sides[p]!=3)
+        return @"Assign a left and a right controller to the same player to complete the pair.";
+    return nil;
 }

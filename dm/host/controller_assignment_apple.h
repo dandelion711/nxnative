@@ -41,7 +41,7 @@ static NSArray *controller_assignment_resolve(dm_controller_host host, NSArray *
         int p = [choice[@"player"] intValue] - 1;
         if (p >= 0) reserved &= ~(1u << p);
     }
-    (void)ios_plan_routes_reserved(*host.slots, rows, overrides, *host.merge && !overrides.count, sources, reserved);
+    dm_ios_routes plan = ios_plan_routes_reserved(*host.slots, rows, overrides, *host.merge && !overrides.count, sources, reserved);
     NSMutableArray *resolved = [NSMutableArray new];
     for (NSDictionary *row in rows) {
         NSString *key = row[@"id"]; GCController *device = cs_devices[key];
@@ -52,7 +52,8 @@ static NSArray *controller_assignment_resolve(dm_controller_host host, NSArray *
         NSString *automatic = slot == 0 && !host.mode() ? @"handheld" : @"pro";
         [resolved addObject:@{@"id": key, @"player": @(slot + 1),
             @"style": configured ? cs_style_name(configured) : automatic,
-            @"configuredStyle": choice[@"style"] ?: @"auto", @"automaticStyle": automatic}];
+            @"configuredStyle": choice[@"style"] ?: @"auto", @"automaticStyle": automatic,
+            @"role": choice[@"role"] ?: @"both", @"pairComplete": @(slot<0 || !plan.sides[slot] || plan.sides[slot]==3)}];
     }
     return resolved;
 }
@@ -64,10 +65,13 @@ static dm_controller_requirements controller_assignment_requirements(dm_controll
     game.fallback = supported ? DM_FALLBACK_IF_PLAYER_ONE_FREE : DM_FALLBACK_NONE;
     return game;
 }
+static GCController *cs_pair_left[DM_PLAYERS], *cs_pair_right[DM_PLAYERS];
+static BOOL cs_pair_reconciling;
 static NSString *controller_assignment_apply(dm_controller_host host, NSArray *choices, int minimum, int maximum, uint32_t *changed) {
     cs_update(host.devices());
     NSDictionary *next = nil; NSString *error = cs_validate_choices(choices, &next);
     if (error) return error;
+    error=cs_pair_error(choices); if (error && !cs_pair_reconciling) return error;
     dm_pad_reconfigure_begin();
     @try {
         NSArray *resolved = controller_assignment_resolve(host, choices);
@@ -77,16 +81,20 @@ static NSString *controller_assignment_apply(dm_controller_host host, NSArray *c
         for (NSDictionary *choice in next.allValues)
             if ([choice[@"player"] intValue] != -1 || ![choice[@"style"] isEqual:@"auto"]) edited = YES;
         if (!edited && !cs_explicit) { if (changed) *changed = 0; return nil; }
+        GCController *left[DM_PLAYERS]={nil}, *right[DM_PLAYERS]={nil};
         GCController *owners[DM_PLAYERS] = {nil}; uint32_t styles[DM_PLAYERS] = {0}, affected = 0;
         for (NSDictionary *choice in resolved) {
             int p = [choice[@"player"] intValue] - 1; if (p < 0) continue;
-            owners[p] = cs_devices[choice[@"id"]]; styles[p] = cs_style(choice[@"configuredStyle"]);
+            GCController *c=cs_devices[choice[@"id"]]; int role=cs_role(choice);
+            if (role==1) left[p]=c; else if (role==2) right[p]=c; else owners[p]=c;
+            styles[p] = cs_style(choice[@"configuredStyle"]);
         }
+        for (int p=0;p<DM_PLAYERS;p++) if (left[p] || right[p]) owners[p]=left[p] ?: right[p];
         for (int p = 0; p < DM_PLAYERS; p++) {
             // Keyboard and raw-HID slots are outside this device list. An
             // Automatic choice must not displace a source the sheet cannot edit.
             if (host.slots->owner[p] && !host.held[p] && !owners[p]) continue;
-            if (*host.merge || host.slots->owner[p] != (__bridge const void *)owners[p] || dm_pad_configured_style(p) != styles[p]) affected |= 1u << p;
+            if (cs_pair_left[p]!=left[p] || cs_pair_right[p]!=right[p] || *host.merge || host.slots->owner[p] != (__bridge const void *)owners[p] || dm_pad_configured_style(p) != styles[p]) affected |= 1u << p;
         }
         // Legacy player 1 can still have a queued controller sample after its device
         // disconnected. Entering explicit mode must invalidate that source as well.
@@ -98,6 +106,8 @@ static NSString *controller_assignment_apply(dm_controller_host host, NSArray *c
             c.extendedGamepad.valueChangedHandler = nil; dm_motion_detach(c, 0);
         }
         for (int p = 0; p < DM_PLAYERS; p++) if (affected >> p & 1) {
+            if (cs_pair_left[p]) dm_motion_detach_role(cs_pair_left[p],p,1);
+            if (cs_pair_right[p]) { cs_pair_right[p].extendedGamepad.valueChangedHandler=nil; dm_motion_detach_role(cs_pair_right[p],p,2); }
             if (host.held[p]) { host.held[p].extendedGamepad.valueChangedHandler = nil; dm_motion_detach(host.held[p], p); }
             dm_haptics_apple_controller(p, nil); host.held[p] = nil;
             pad_slot_free(host.slots, host.slots->owner[p]);
@@ -107,13 +117,26 @@ static NSString *controller_assignment_apply(dm_controller_host host, NSArray *c
         dm_pad_explicit(1);
         for (int p = 0; p < DM_PLAYERS; p++) {
             dm_pad_style(p, styles[p], owners[p] && !dm_pad_is_joycon(owners[p]));
-            if (!(affected >> p & 1) || !owners[p]) continue;
+            uint32_t sides=(left[p] ? 1u : 0u)|(right[p] ? 2u : 0u);
+            dm_pad_pair_sources(p,sides!=0,sides);
+            if (!(affected >> p & 1)) continue;
+            cs_pair_left[p]=left[p]; cs_pair_right[p]=right[p];
+            if (!owners[p]) continue;
             GCController *c = owners[p];
             pad_slot_assign(host.slots, (__bridge const void *)c, (c.vendorName.UTF8String ?: "?"), p); host.held[p] = c;
             host.keep(c);
             void (*read)(GCExtendedGamepad *) = host.read;
             c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read(g); };
-            dm_motion_attach(c, p); dm_haptics_apple_controller(p, c);
+            cs_pair_left[p]=left[p]; cs_pair_right[p]=right[p];
+            if (sides) {
+                for (int role=1;role<=2;role++) {
+                    GCController *side=role==1 ? left[p] : right[p]; if (!side) continue;
+                    host.keep(side);
+                    side.extendedGamepad.valueChangedHandler=^(GCExtendedGamepad *g,GCControllerElement *el) { (void)el; read(g); };
+                    dm_motion_attach_role(side,p,role);
+                }
+                dm_haptics_apple_pair(p,left[p],right[p]);
+            } else { dm_motion_attach(c, p); dm_haptics_apple_controller(p, c); }
         }
         dm_pad_players(pad_slot_mask(host.slots));
         if (host.changed) host.changed(nil);

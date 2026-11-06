@@ -21,9 +21,15 @@ struct LauncherController: Identifiable, Decodable {
     let name: String
 }
 
+enum ControllerPairRole: String, CaseIterable, Identifiable {
+    case both, left, right
+    var id: Self { self }
+    var title: String { self == .both ? "One controller" : self == .left ? "Left controller" : "Right controller" }
+}
 struct ControllerChoice: Equatable {
     var player: Int? = -1
     var style: GameControllerStyle = .auto
+    var role: ControllerPairRole = .both
 }
 
 final class ControllerSettingsModel: ObservableObject {
@@ -53,10 +59,11 @@ final class ControllerSettingsModel: ObservableObject {
     }
 
     func start() -> Bool {
+        guard pairingIssue == nil else { return false }
         guard let channel else { return true }
         let rows: [[String: Any]] = controllers.map { device in
             let choice = choices[device.id] ?? ControllerChoice()
-            return ["id": device.id, "player": choice.player ?? 0, "style": choice.style.token]
+            return ["id": device.id, "player": choice.player ?? 0, "style": choice.style.token, "role": choice.role.rawValue]
         }
         return channel.start(environment: ProcessInfo.processInfo.environment, choices: rows, explicit: choices.values.contains { $0.player != -1 || $0.style != .auto })
     }
@@ -84,12 +91,21 @@ final class ControllerSettingsModel: ObservableObject {
     func choosePlayer(_ player: Int?, for id: LauncherController.ID) {
         guard var choice = choices[id] else { return }
         if let player, player != -1 && !(1...8).contains(player) { return }
-        // Move the displaced device to this device's old slot (or Unassigned).
-        // There is always at most one device in each player slot, even in the draft.
-        if let player, player > 0, let other = choices.first(where: { $0.key != id && $0.value.player == player }) {
-            choices[other.key]?.player = choice.player
+        // Keep ordinary single-controller swaps. A pair can retain only its
+        // complementary member, so an extra source returns to Automatic.
+        if let player, player > 0 {
+            let others = choices.filter { $0.key != id && $0.value.player == player }
+            for (key, target) in others {
+                let shares = choice.style == .pair && target.style == .pair && choice.role != .both && target.role != .both && choice.role != target.role
+                if !shares {
+                    let swaps = others.count == 1 && choice.role == .both && target.role == .both
+                    choices[key]?.player = swaps ? choice.player : -1
+                    if !swaps { choices[key]?.role = .both }
+                }
+            }
         }
         choice.player = player
+        if player == nil || player == -1 { choice.role = .both }
         choices[id] = choice
     }
 
@@ -124,12 +140,32 @@ final class ControllerSettingsModel: ObservableObject {
         return "Player \(player) • Automatic"
     }
 
+    var pairingIssue: String? {
+        var roles: [Int: Set<ControllerPairRole>] = [:]
+        for c in choices.values where c.role != .both {
+            guard let p=c.player, p>0 else { return "Choose a player for each paired controller." }
+            roles[p,default: []].insert(c.role)
+        }
+        return roles.values.contains(where: { $0 != Set([.left,.right]) }) ? "Assign a left and a right controller to the same player to complete the pair." : nil
+    }
+    func chooseRole(_ role: ControllerPairRole, for id: String) {
+        guard var choice=choices[id] else { return }
+        let p=choice.player == -1 ? resolvedPlayer(for:id) : choice.player
+        if role != .both { choice.player=p ?? 1 }
+        for key in choices.keys where key != id && choices[key]?.player == choice.player && choice.player != nil && choice.player != -1 {
+            if role == .both || choices[key]?.style != .pair || choices[key]?.role == .both || (choices[key]?.role == role && choice.role == .both) {
+                choices[key]?.player = -1; choices[key]?.role = .both
+            } else if choices[key]?.role == role { choices[key]?.role = choice.role }
+        }
+        choice.role=role; choices[id]=choice
+    }
     func automaticStyle(for id: String) -> String {
         resolvedPlayer(for: id) == 1 && operationMode() == "0" ? "Handheld" : "Pro Controller"
     }
 
     func chooseStyle(_ style: GameControllerStyle, for id: LauncherController.ID) {
         guard choices[id] != nil else { return }
+        if style != .pair { chooseRole(.both,for:id) }
         choices[id]?.style = style
     }
 }
@@ -173,10 +209,19 @@ struct ControllerSettingsFields: View {
                         set: { model.chooseStyle($0, for: controller.id) })) {
                         ForEach(GameControllerStyle.allCases) { Text($0 == .auto ? model.automaticStyle(for: controller.id) + " • Automatic" : $0.rawValue).tag($0) }
                     }
+                    if model.choices[controller.id]?.style == .pair {
+                        Picker("Pair input", selection: Binding(get: { model.choices[controller.id]?.role ?? .both }, set: { model.chooseRole($0,for:controller.id) })) {
+                            ForEach(ControllerPairRole.allCases) { Text($0.title).tag($0) }
+                        }
+                        if model.choices[controller.id]?.role == .both {
+                            Text("Both Joy-Cons share this controller's motion. Separate hand movements need two controllers.").font(.callout).foregroundStyle(.secondary)
+                        }
+                    }
                 } header: {
                     Text("Controller \(index + 1)")
                 }
             }
+            if let issue=model.pairingIssue { Section { Text(issue).foregroundStyle(.red) } }
         }
     }
 }
@@ -196,7 +241,7 @@ struct ControllerSettingsSheet: View {
             }.formStyle(.grouped)
             HStack {
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction).disabled(model.pairingIssue != nil)
             }.padding(20)
         }
         .frame(width: 600, height: 600)

@@ -23,7 +23,8 @@ static int hid_clock_gettime(clockid_t clock, struct timespec *ts) { (void)clock
 static int hid_usleep(useconds_t usec) { (void)usec; if (script_hold) script_hold(); return 0; }
 #define CHECK(c, msg) do { checks++; if (!(c)) { fails++; fprintf(stderr, "FAIL: %s (line %d)\n", msg, __LINE__); } } while (0)
 int dm_opmode(void) { return g_mode; }
-uint64_t guest_ns(void) { return 1000000000ull; }
+static uint64_t pair_guest_time=1000000000ull;
+uint64_t guest_ns(void) { return pair_guest_time; }
 uint64_t now_ns(void) { return motion_now; }
 static uint64_t test_frame;   // presented frames (t_rec moves it)
 uint64_t dm_guest_frame(void) { return test_frame; }
@@ -693,6 +694,41 @@ static void t_live_apply(void) {
     dm_pad_explicit(0); dm_pad_style(0, DM_STYLE_AUTO, 0); dm_pad_players(1); g_mode = 1; h_hid_SetStyles(0xffffffffu);
 }
 
+
+static void t_two_source_pair(void) {
+    g_mode=1; ids((uint32_t[]){0,1},2); h_hid_SetStyles(0x1f);
+    dm_pad_reconfigure_begin(); dm_pad_reconfigure_reset(1);
+    dm_pad_explicit(1); dm_pad_style(0,DM_STYLE_PAIR,0); dm_pad_pair_sources(0,1,3); dm_pad_players(1);
+    dm_pad_reconfigure_end(); dm_input_quiesce();
+    dm_pad_set_side(0,1,DM_BTN_A|DM_BTN_L,100,200);
+    dm_pad_set_side(0,2,DM_BTN_B|DM_BTN_R,300,400);
+    NpadState state; fill(&state,0,STYLE_JOYDUAL);
+    CHECK(state.lx==100 && state.ly==200 && state.rx==300 && state.ry==400,"two sources drive separate sticks on one paired player");
+    CHECK((state.buttons & (DM_BTN_RIGHT|DM_BTN_L|DM_BTN_B|DM_BTN_R))==(DM_BTN_RIGHT|DM_BTN_L|DM_BTN_B|DM_BTN_R),"pair composes left and right buttons");
+    dm_pad_set_side(0,1,0,0,0); fill(&state,0,STYLE_JOYDUAL);
+    CHECK((state.buttons & (DM_BTN_B|DM_BTN_R))==(DM_BTN_B|DM_BTN_R) && state.rx==300,"one side's release preserves the other side");
+    uint32_t handles[2]; CHECK(h_hid_SixHandles(handles,2,&(uint32_t){0},STYLE_JOYDUAL)==2,"pair exposes two side-specific sensor handles");
+    uint64_t gen=dm_pad_generation(0); motion_now+=10000000;
+    dm_motion_set_side_generation(0,1,gen,(float[]){0,0,-1},(float[]){1,0,0});
+    dm_motion_set_side_generation(0,2,gen,(float[]){0,0,-1},(float[]){0,2,0});
+    SixAxisState left,right;
+    h_hid_SixStates(&left,1,&handles[0]); h_hid_SixStates(&right,1,&handles[1]);
+    CHECK(left.gyro[0]>.1f && left.gyro[1]==0 && right.gyro[0]==0 && right.gyro[1]>.2f,"left and right handles read independent motion sources");
+    dm_pad_reconfigure_begin(); dm_pad_reconfigure_reset(1); dm_pad_reconfigure_end();
+    dm_motion_set_side_generation(0,1,gen,(float[]){0,0,-1},(float[]){9,0,0});
+    h_hid_SixStates(&left,1,&handles[0]); CHECK(left.gyro[0]==0,"old pair callbacks cannot publish after a source swap");
+    dm_pad_set_side(0,1,DM_BTN_SHAKE,0,0); pair_guest_time+=20000000;
+    h_hid_SixStates(&left,1,&handles[0]); h_hid_SixStates(&right,1,&handles[1]);
+    CHECK(fabsf(left.acc[0])>.1f && right.acc[0]==0,"mapped Shake affects only its paired side");
+    dm_pad_pair_sources(0,1,1);
+    CHECK(!style_of(0) && h_hid_SixStates(&right,1,&handles[1])==0,"a partial two-controller pair is disconnected rather than keyboard-ready");
+    dm_pad_pair_sources(0,0,0); dm_pad_style(0,DM_STYLE_PAIR,0); motion_now+=10000000;
+    dm_motion_set(0,(float[]){0,0,-1},(float[]){0,0,1});
+    h_hid_SixStates(&left,1,&handles[0]); h_hid_SixStates(&right,1,&handles[1]);
+    CHECK(!memcmp(left.gyro,right.gyro,sizeof left.gyro),"single-gamepad pair emulation retains shared motion");
+    dm_pad_style(0,DM_STYLE_AUTO,0); dm_pad_explicit(0); dm_pad_players(1); h_hid_SetStyles(0xffffffffu);
+}
+
 int main(void) {
     CHECK(setenv("DM_RUMBLE_LOG", "1", 1) == 0, "enable rumble diagnostics");
     t_slots();
@@ -720,6 +756,7 @@ int main(void) {
     t_live_apply();
     t_ios_touch_fallback();
     t_ios_automatic_compatibility();
+    t_two_source_pair();
     printf("hid players: %d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

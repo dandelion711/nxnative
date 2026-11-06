@@ -296,6 +296,9 @@ static void ctl_start(void) {
 }
 
 static _Atomic uint32_t g_player_style[DM_PLAYERS], g_styles_supported = 0xffffffffu;
+static _Atomic uint32_t g_pair_grouped[DM_PLAYERS], g_pair_sides[DM_PLAYERS];
+static uint64_t g_side_buttons[DM_PLAYERS][2];
+static int32_t g_side_axes[DM_PLAYERS][2][2];
 static _Atomic int g_explicit_players;
 static uint32_t g_manual_players;   // iOS slots with a per-device override, protected by the HID lock
 static uint32_t connected_id(void) { return !atomic_load(&g_player_style[0]) && dm_opmode() == 0 ? NPAD_HANDHELD : NPAD_NO1; }
@@ -329,6 +332,7 @@ static uint32_t style_for_player(uint32_t id, int p) {
     if (p < 0) return 0;
     uint32_t style = atomic_load(&g_player_style[p]);
     if (!style) style = id == NPAD_HANDHELD ? STYLE_HANDHELD : STYLE_FULLKEY;
+    if (style == STYLE_JOYDUAL && atomic_load(&g_pair_grouped[p]) && atomic_load(&g_pair_sides[p]) != 3) return 0;
     return style & atomic_load(&g_styles_supported);
 }
 static uint32_t style_of(uint32_t id) { HID_GUARD; return style_for_player(id, player_of(id)); }
@@ -355,6 +359,39 @@ void dm_pad_style(int player, uint32_t style, int follow_hold) { HID_GUARD;
         dm_motion_clear(player); dm_haptics_clear(player);
         style_changed((uint32_t)player);
     }
+}
+typedef struct { uint64_t start, end; int held; } pair_shake;
+static pair_shake g_pair_shake[DM_PLAYERS][2]; // protected by the HID barrier
+static void pair_shake_note(int p, int side, uint64_t buttons) {
+    pair_shake *s=&g_pair_shake[p][side]; int held=(buttons & DM_BTN_SHAKE)!=0;
+    if (s->held==held) return;
+    uint64_t t=guest_ns(); s->held=held;
+    if (held) { if (t>=s->end) s->start=t; s->end=UINT64_MAX; }
+    else s->end=s->start+((t-s->start)/SHAKE_CYCLE_NS+1)*SHAKE_CYCLE_NS;
+}
+void dm_pad_pair_sources(int p, int grouped, uint32_t sides) { HID_GUARD;
+    if (p < 0 || p >= DM_PLAYERS) return;
+    uint32_t old = atomic_exchange(&g_pair_sides[p], sides & 3u);
+    int was = atomic_exchange(&g_pair_grouped[p], !!grouped);
+    if (old != (sides & 3u) || was != !!grouped) style_changed(dm_player_npad(p));
+}
+void dm_pad_set_side(int p, int role, uint64_t b, int32_t lx, int32_t ly) { HID_GUARD;
+    if (p < 0 || p >= DM_PLAYERS || role < 1 || role > 2) return;
+    uint64_t out;
+    if (role == 1) {
+        out = b & (DM_BTN_LEFT|DM_BTN_UP|DM_BTN_RIGHT|DM_BTN_DOWN|DM_BTN_L|DM_BTN_ZL|DM_BTN_LS|DM_BTN_MINUS|DM_BTN_LEFT_SL|DM_BTN_LEFT_SR|DM_BTN_SHAKE);
+        if (b & DM_BTN_A) out |= DM_BTN_RIGHT; if (b & DM_BTN_B) out |= DM_BTN_DOWN;
+        if (b & DM_BTN_X) out |= DM_BTN_UP; if (b & DM_BTN_Y) out |= DM_BTN_LEFT;
+        if (b & DM_BTN_PLUS) out |= DM_BTN_MINUS;
+    } else {
+        out = b & (DM_BTN_A|DM_BTN_B|DM_BTN_X|DM_BTN_Y|DM_BTN_R|DM_BTN_ZR|DM_BTN_PLUS|DM_BTN_RIGHT_SL|DM_BTN_RIGHT_SR|DM_BTN_SHAKE);
+        if (b & DM_BTN_LS) out |= DM_BTN_RS;
+        if (b & DM_BTN_MINUS) out |= DM_BTN_PLUS;
+    }
+    pair_shake_note(p,role-1,out);
+    g_side_buttons[p][role-1] = out;
+    g_side_axes[p][role-1][0] = lx; g_side_axes[p][role-1][1] = ly;
+    dm_pad_set_player(p,g_side_buttons[p][0]|g_side_buttons[p][1],g_side_axes[p][0][0],g_side_axes[p][0][1],g_side_axes[p][1][0],g_side_axes[p][1][1]);
 }
 void dm_pad_explicit(int enabled) { HID_GUARD; atomic_store(&g_explicit_players, !!enabled); }
 static void note_merged(void) {   // logs the players whose npad the game does not support, when that changes
@@ -402,12 +439,14 @@ void dm_input_quiesce(void) {
     HID_GUARD;
     atomic_store(&g_peek_latch, 0);
     dm_input_set(0, 0, 0, 0, 0); atomic_store(&g_latch, 0);
-    for (int p = 0; p < DM_PLAYERS; p++) { dm_pad_set_player(p, 0, 0, 0, 0, 0); atomic_store(&g_pad_latch[p], 0); }
+    for (int p = 0; p < DM_PLAYERS; p++) { dm_pad_set_player(p, 0, 0, 0, 0, 0); atomic_store(&g_pad_latch[p], 0); memset(g_side_buttons[p],0,sizeof g_side_buttons[p]); memset(g_side_axes[p],0,sizeof g_side_axes[p]); memset(g_pair_shake[p],0,sizeof g_pair_shake[p]); }
 }
 void dm_pad_reconfigure_begin(void) { hid_lock(); g_reconfigure_depth++; }
 void dm_pad_reconfigure_sources(uint32_t affected) {
     for (int p = 0; p < DM_PLAYERS; p++) if (affected >> p & 1) {
         atomic_fetch_add(&g_pad_generation[p], 1);
+        memset(g_side_buttons[p],0,sizeof g_side_buttons[p]); memset(g_side_axes[p],0,sizeof g_side_axes[p]); memset(g_pair_shake[p],0,sizeof g_pair_shake[p]);
+        dm_motion_clear_side(p,1); dm_motion_clear_side(p,2);
         dm_pad_set_player(p, 0, 0, 0, 0, 0); atomic_store(&g_pad_latch[p], 0);
         dm_motion_clear(p); dm_motion_clear_hid(p); dm_haptics_clear(p);
     }
@@ -744,6 +783,40 @@ static uint64_t motion_copy(live_motion *m, motion_state *out) {   // copies a s
 }
 static _Atomic int g_motion_suspended;
 void dm_motion_suspend(int suspended) { atomic_store(&g_motion_suspended, !!suspended); }
+typedef struct { float acc[3], gyro[3], angle[3], dir[9]; } pair_motion_sample;
+enum { SIDE_HISTORY = 64 };
+typedef struct {
+    motion_state fusion; uint64_t last, received, count;
+    pair_motion_sample samples[SIDE_HISTORY]; uint64_t times[SIDE_HISTORY];
+} side_motion;
+static side_motion g_side_motion[DM_PLAYERS][2]; // protected by the recursive HID barrier
+void dm_motion_clear_side(int p, int role) { HID_GUARD;
+    if (p >= 0 && p < DM_PLAYERS && role >= 1 && role <= 2) memset(&g_side_motion[p][role-1],0,sizeof(side_motion));
+}
+void dm_motion_set_side_generation(int p, int role, uint64_t generation, const float acc[3], const float rot[3]) { HID_GUARD;
+    if (p < 0 || p >= DM_PLAYERS || role < 1 || role > 2 || generation != dm_pad_generation(p)) return;
+    pthread_once(&g_motion_once,motion_env); if (g_motion_off) return;
+    side_motion *m=&g_side_motion[p][role-1]; uint64_t t=now_ns();
+    if (m->last && t <= m->last) return;
+    if (!m->last || t-m->received > MOTION_STALE_NS) { memset(m,0,sizeof *m); motion_reset(&m->fusion); }
+    float dt=m->last ? (float)((double)(t-m->last)/1e9) : 0;
+    motion_update(&m->fusion,&g_motion_map,acc,rot,dt,g_motion_gain);
+    unsigned i=m->count++ % SIDE_HISTORY;
+    motion_fill(&m->fusion,m->samples[i].acc,m->samples[i].gyro,m->samples[i].angle,m->samples[i].dir);
+    m->times[i]=guest_ns(); m->last=m->received=t;
+}
+static int pair_motion_read(int p, unsigned side, uint64_t time, pair_motion_sample *out) {
+    if (p < 0 || p >= DM_PLAYERS || side > 1 || atomic_load(&g_motion_suspended)) return 0;
+    side_motion *m=&g_side_motion[p][side];
+    if (!m->count || now_ns()-m->received > MOTION_STALE_NS) return 0;
+    uint64_t n=m->count < SIDE_HISTORY ? m->count : SIDE_HISTORY;
+    for (uint64_t j=0;j<n;j++) {
+        unsigned i=(unsigned)((m->count-1-j)%SIDE_HISTORY);
+        if (m->times[i] <= time) { *out=m->samples[i]; return 1; }
+    }
+    // A first sample is still valid for a sensor history entry older than its arrival.
+    *out=m->samples[(m->count-n)%SIDE_HISTORY]; return 1;
+}
 static int motion_live(int p, motion_state *out) {
     if (p < 0 || p >= DM_PLAYERS || atomic_load(&g_motion_suspended)) return 0;
     pthread_once(&g_motion_once, motion_env);
@@ -780,6 +853,21 @@ static void six_sample(SixAxisState *s, int64_t samp, int shakes) {
     float c = (float)cos(2 * M_PI * yaw), sn = (float)sin(2 * M_PI * yaw);
     s->dir[0] = c; s->dir[1] = sn; s->dir[3] = -sn; s->dir[4] = c; s->dir[8] = 1;
 }
+static int pair_shaking(int p, unsigned side, uint64_t t) {
+    pair_shake *s=&g_pair_shake[p][side]; return t>=s->start && t<s->end;
+}
+static void pair_shake_sample(SixAxisState *s, int p, unsigned side, int physical) {
+    uint64_t t=(uint64_t)s->sampling*SIX_PERIOD_NS;
+    if (!pair_shaking(p,side,t)) return;
+    double ph=2*M_PI*SHAKE_HZ*(double)(t-g_pair_shake[p][side].start)/1e9;
+    s->acc[0]+=(float)(SHAKE_G*sin(ph));
+    if (!physical) {
+        double yaw=SHAKE_REV/(2*M_PI*SHAKE_HZ)*(1-cos(ph));
+        s->gyro[2]=(float)(SHAKE_REV*sin(ph)); s->angle[2]=(float)yaw;
+        float c=(float)cos(2*M_PI*yaw), sn=(float)sin(2*M_PI*yaw);
+        s->dir[0]=c; s->dir[1]=sn; s->dir[3]=-sn; s->dir[4]=c; s->dir[8]=1;
+    }
+}
 // SixAxisSensorHandle: byte 0 the SDK style index (3 + style bit number), byte 1 the npad id, byte 2 the device (left / right Joy-Con of a pair). The styles made of two Joy-Cons (handheld, dual) have
 // two sensors for JoyDual, one otherwise (device 2 for FullKey / Handheld). A handle reads as connected while its controller is connected in that style; otherwise its entries are zero (not connected) and the count 0.
 // Only player 1's controller shakes (DM_BTN_SHAKE comes from the keyboard, the iPhone and DM_KEYS, all player 1)
@@ -791,6 +879,21 @@ static int six_connected(uint32_t h) {
 static int six_states(SixAxisState *out, int n, uint32_t h) { HID_GUARD;
     if (n <= 0) return 0;
     if (!six_connected(h)) { memset(out, 0, sizeof *out * (size_t)n); return 0; }
+    int pair_player=player_of(h >> 8 & 0xff);
+    if (pair_player >= 0 && (h & 0xff)==5 && atomic_load(&g_pair_grouped[pair_player])) {
+        int64_t top=(int64_t)(guest_ns()/SIX_PERIOD_NS);
+        for (int i=0;i<n;i++) {
+            six_sample(&out[i],top-i,0);
+            pair_motion_sample m; unsigned side=h >> 16 & 0xff;
+            int physical=pair_motion_read(pair_player,side,(uint64_t)(top-i)*SIX_PERIOD_NS,&m);
+            if (physical) {
+                memcpy(out[i].acc,m.acc,sizeof m.acc); memcpy(out[i].gyro,m.gyro,sizeof m.gyro);
+                memcpy(out[i].angle,m.angle,sizeof m.angle); memcpy(out[i].dir,m.dir,sizeof m.dir);
+            }
+            pair_shake_sample(&out[i],pair_player,side,physical);
+        }
+        return n;
+    }
     int64_t samp = (int64_t)(guest_ns() / SIX_PERIOD_NS);
     int pl = player_of(h >> 8 & 0xff), shakes = pl == 0;
     motion_state ms;
@@ -1001,6 +1104,13 @@ HLE_FORCE("_ZN2nn3hid17StopSixAxisSensorERKNS0_19SixAxisSensorHandleE", "six-axi
 HLE_FORCE("_ZN2nn3hid21GetSixAxisSensorStateEPNS0_18SixAxisSensorStateERKNS0_19SixAxisSensorHandleE", "six-axis sensor current state", void, h_hid_SixState, SixAxisState *s, const uint32_t *h) { six_states(s, 1, *h); }
 HLE_FORCE("_ZN2nn3hid21IsSixAxisSensorAtRestERKNS0_19SixAxisSensorHandleE", "six-axis sensor at rest: yes unless player 1's is shaking or a live controller is turning", unsigned, h_hid_SixRest, const uint32_t *h) { HID_GUARD;
     if (!six_connected(*h)) return 1;
+    int pair_player=player_of(*h >> 8 & 0xff);
+    if (pair_player >= 0 && (*h & 0xff)==5 && atomic_load(&g_pair_grouped[pair_player])) {
+        unsigned side=*h >> 16 & 0xff; if (pair_shaking(pair_player,side,guest_ns())) return 0;
+        pair_motion_sample m; if (!pair_motion_read(pair_player,side,guest_ns(),&m)) return 1;
+        return fabsf(m.gyro[0])+fabsf(m.gyro[1])+fabsf(m.gyro[2]) < .01f;
+    }
+
     int pl = player_of(*h >> 8 & 0xff); motion_state ms;
     if (motion_live(pl, &ms)) return fabsf(ms.gyro[0]) + fabsf(ms.gyro[1]) + fabsf(ms.gyro[2]) < 0.01f && !(pl == 0 && shaking(guest_ns()));
     return pl != 0 || !shaking(guest_ns());

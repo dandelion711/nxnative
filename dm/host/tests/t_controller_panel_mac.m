@@ -90,9 +90,9 @@ int main(int argc, char **argv) { @autoreleasepool {
         NSUInteger badges = 0;
         for (NSMenuItem *option in menu.itemArray) if ([option.title hasSuffix:@" • Recommended"]) {
             badges++;
-            assert(cs_style(option.representedObject) == game.styles);
+            assert((game.styles & cs_style(option.representedObject)) != 0);
         }
-        assert(badges == (game.styles == 1 || game.styles == 4 || game.styles == 8 || game.styles == 16 ? 1u : 0u));
+        assert(badges == (game.styles == 24 ? 2u : game.styles == 1 || game.styles == 4 || game.styles == 8 || game.styles == 16 ? 1u : 0u));
     }
     game.styles = 0x1f; [ui refresh];
 
@@ -103,7 +103,18 @@ int main(int argc, char **argv) { @autoreleasepool {
     assert([identify.title isEqual:@"Identify • signal sent"]);
     selectPlayer(ui.panel, @"a", 2);
     assert([ui.panel.drafts[@"a"][@"player"] intValue] == 2 && [ui.panel.drafts[@"b"][@"player"] intValue] == 1);
-    selectStyle(ui.panel, @"a", 2);
+    selectStyle(ui.panel, @"a", 1); selectStyle(ui.panel, @"b", 1);
+    DmControllerPopup *role=popup(ui.panel.window.contentView,@"role.a"); assert(role);
+    [role selectItemAtIndex:1]; [role sendAction:role.action to:role.target];
+    assert(!ui.panel.applyButton.enabled);
+    role=popup(ui.panel.window.contentView,@"role.b"); assert(role);
+    [role selectItemAtIndex:2]; [role sendAction:role.action to:role.target];
+    selectPlayer(ui.panel,@"b",2);
+    assert(cs_role(ui.panel.drafts[@"a"])==1 && cs_role(ui.panel.drafts[@"b"])==2);
+    assert([ui.panel.drafts[@"a"][@"player"] intValue]==2 && [ui.panel.drafts[@"b"][@"player"] intValue]==2 && ui.panel.applyButton.enabled);
+    role=popup(ui.panel.window.contentView,@"role.a");
+    [role selectItemAtIndex:0]; [role sendAction:role.action to:role.target];
+    assert([ui.panel.drafts[@"b"][@"player"] intValue]==-1 && !cs_role(ui.panel.drafts[@"b"]));
     [ui.panel cancel:nil]; settle(^BOOL { return ui.panel == nil; });
     assert(applied == 0 && closed == 1 && [active[0][@"style"] isEqual:@"pro"]);
 

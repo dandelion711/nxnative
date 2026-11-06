@@ -7,6 +7,7 @@ typedef struct {
     pad_slots slots;
     uint32_t styles[DM_PLAYERS];
     uint32_t manual;
+    uint32_t sides[DM_PLAYERS];
 } dm_ios_routes;
 
 static uint32_t ios_style(NSString *name) {
@@ -14,28 +15,14 @@ static uint32_t ios_style(NSString *name) {
 }
 
 static NSString *ios_validate_overrides(NSArray *choices, NSDictionary **accepted) {
-    NSMutableDictionary *overrides = [NSMutableDictionary new];
-    NSMutableSet *seen = [NSMutableSet new];
-    uint32_t fixed = 0;
-    for (NSDictionary *choice in choices) {
-        NSString *key = choice[@"id"], *style = choice[@"style"];
-        NSNumber *value = choice[@"player"];
-        if (![key isKindOfClass:NSString.class] || ![style isKindOfClass:NSString.class] ||
-            ![value isKindOfClass:NSNumber.class] || [seen containsObject:key] || value.doubleValue != value.intValue ||
-            value.intValue < -1 || value.intValue > DM_PLAYERS ||
-            (![style isEqual:@"auto"] && !ios_style(style))) return @"Invalid controller assignment.";
-        if (!cs_devices[key]) return @"A controller disconnected. Review the assignments and try again.";
-        [seen addObject:key];
-        int player = value.intValue;
-        if (player > 0) {
-            uint32_t bit = 1u << (player - 1);
-            if (fixed & bit) return @"Two controllers cannot use the same player.";
-            fixed |= bit;
-        }
-        if (player != -1 || ![style isEqual:@"auto"]) overrides[key] = [choice copy];
+    NSDictionary *validated=nil;
+    NSString *error=cs_validate_choices(choices,&validated); if (error) return error;
+    NSMutableDictionary *overrides=[NSMutableDictionary new];
+    for (NSString *key in validated) {
+        NSDictionary *c=validated[key];
+        if ([c[@"player"] intValue]!=-1 || ![c[@"style"] isEqual:@"auto"]) overrides[key]=c;
     }
-    *accepted = [overrides copy];
-    return nil;
+    *accepted=[overrides copy]; return nil;
 }
 
 static void ios_route(dm_ios_routes *plan, NSArray<NSMutableArray<GCController *> *> *sources,
@@ -47,6 +34,7 @@ static void ios_route(dm_ios_routes *plan, NSArray<NSMutableArray<GCController *
     if (choice) {
         plan->styles[slot] = ios_style(choice[@"style"]);
         plan->manual |= 1u << slot;
+        int role=cs_role(choice); if (role) plan->sides[slot] |= 1u << (role-1);
     }
 }
 

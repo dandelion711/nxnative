@@ -30,6 +30,9 @@ static uint32_t configured[DM_PLAYERS], supported = 0x1f, supportedIDs = 0x3ff, 
 static uint64_t generations[DM_PLAYERS];
 static int depth, published, samples[DM_PLAYERS], keepCalls, readCalls;
 static GCController *routed[DM_PLAYERS];
+static uint32_t grouped_sides[DM_PLAYERS];
+static int side_samples[DM_PLAYERS][2];
+static GCController *group_outputs[DM_PLAYERS][2];
 static NSMutableArray *routing;
 static NSArray<GCController *> *getDevices(void) { return (id)devices; }
 static int mode(void) { return 1; }
@@ -179,6 +182,11 @@ static void test_ios_routes(SwapDevice *a, SwapDevice *b, SwapDevice *c) {
     puts("iOS routes: automatic, per-device override, hotplug, merged defaults and unassign OK");
 }
 
+void dm_motion_set_side_generation(int p,int role,uint64_t generation,const float a[3],const float r[3]) { (void)a; (void)r; if (generation==generations[p]) side_samples[p][role-1]++; }
+void dm_motion_clear_side(int p,int role) { (void)role; dm_motion_clear(p); }
+void dm_pad_pair_sources(int p,int grouped,uint32_t sides) { grouped_sides[p]=grouped ? sides : 0; }
+void dm_haptics_apple_pair(int p,GCController *left,GCController *right) { group_outputs[p][0]=left; group_outputs[p][1]=right; }
+
 int main(void) { @autoreleasepool {
     SwapDevice *a = device(), *b = device(), *c = device(); devices = @[a, b, c]; routing = [NSMutableArray new];
     pad_slots slots = {0}; GCController *held[DM_PLAYERS] = {nil}; int merge = 0, own = 0;
@@ -231,6 +239,23 @@ int main(void) { @autoreleasepool {
     assert(!controller_assignment_apply(host, automaticChoices, 1, 8, &affected));
     assert(slots.owner[0] == &keyboard && own == 1);
     puts("controller assignments: identity, live swaps, stale motion, haptics order, unchanged owners and validation OK");
+    devices=@[a,b]; NSArray *pairRows=cs_update((id)devices);
+    NSString *pairA=pairRows[0][@"id"], *pairB=pairRows[1][@"id"];
+    NSArray *pairChoices=@[@{@"id":pairA,@"player":@1,@"style":@"pair",@"role":@"left"},@{@"id":pairB,@"player":@1,@"style":@"pair",@"role":@"right"}];
+    assert(!cs_validate_choices(pairChoices,NULL) && !cs_pair_error(pairChoices));
+    assert(!controller_assignment_apply(host,pairChoices,1,1,&affected));
+    assert(connected==1 && grouped_sides[0]==3 && held[0]==(id)a && cs_pair_right[0]==(id)b);
+    assert(group_outputs[0][0]==(id)a && group_outputs[0][1]==(id)b);
+    a.motion.valueChangedHandler((id)a.motion); b.motion.valueChangedHandler((id)b.motion);
+    assert(side_samples[0][0]==1 && side_samples[0][1]==1);
+    NSArray *partial=@[pairChoices[0]]; assert(cs_pair_error(partial));
+    assert(controller_assignment_apply(host,partial,0,8,NULL));
+    devices=@[a]; cs_pair_reconciling=YES;
+    assert(!controller_assignment_apply(host,partial,0,8,NULL)); cs_pair_reconciling=NO;
+    assert(grouped_sides[0]==1);
+    NSArray *plain=@[@{@"id":pairA,@"player":@1,@"style":@"pro"}];
+    assert(!controller_assignment_apply(host,plain,1,8,NULL) && !grouped_sides[0]);
+    devices=@[]; assert(!controller_assignment_apply(host,@[],0,8,NULL));
     test_ios_routes(a, b, c);
     test_ios_automatic_compatibility();
     return 0;

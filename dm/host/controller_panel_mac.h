@@ -10,6 +10,7 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
 @interface DmControllerPopup : NSPopUpButton
 @property(copy) NSString *deviceID;
 @property BOOL styleChoice;
+@property BOOL roleChoice;
 @end
 @implementation DmControllerPopup
 @end
@@ -162,7 +163,7 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
     dm_controller_requirements game = self.displayedRequirements;
     BOOL keyboard = NO;
     int count = controller_ready_players(game, self.resolved, &keyboard);
-    self.applyButton.enabled = count >= self.minimum && count <= self.maximum;
+    self.applyButton.enabled = count >= self.minimum && count <= self.maximum && !cs_pair_error(self.choices);
     NSMutableArray *details = [NSMutableArray new];
     if (self.minimum > self.maximum) {
         [details addObject:@"The game requested conflicting player counts."];
@@ -200,7 +201,7 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
     } else { status = [NSString stringWithFormat:@"%d player%@ ready", count, count == 1 ? @"" : @"s"]; detail = @"Changes apply to this session."; }
     if (keyboard) detail = [detail stringByAppendingString:@" Player 1’s keyboard counts."];
     self.message.stringValue = status;
-    self.statusDetail.stringValue = detail;
+    self.statusDetail.stringValue = cs_pair_error(self.choices) ?: detail;
     self.operationError.hidden = YES;
 }
 - (void)refreshRequirements {
@@ -237,7 +238,7 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
         NSString *key = row[@"id"];
         if ([self.recommendationSeen containsObject:key]) continue;
         [self.recommendationSeen addObject:key];
-        if (![row[@"player"] intValue] || (self.displayedRequirements.styles & cs_style(row[@"style"]))) continue;
+        if (cs_role(self.drafts[key]) || ![row[@"player"] intValue] || (self.displayedRequirements.styles & cs_style(row[@"style"]))) continue;
         NSString *style = controller_recommended_style(self.displayedRequirements.styles, [row[@"player"] intValue] - 1);
         if (style) {
             NSMutableDictionary *choice = [self.drafts[key] mutableCopy];
@@ -273,7 +274,7 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
         for (NSUInteger i = 0; i < tokens.count; i++) {
             NSString *title = labels[i];
             if (i == 0) title = [NSString stringWithFormat:@"%@ • Automatic", [effective[@"automaticStyle"] isEqual:@"handheld"] ? @"Handheld" : @"Pro Controller"];
-            else if ([controller_required_style(self.displayedRequirements.styles) isEqual:tokens[i]]) title = [title stringByAppendingString:@" • Recommended"];
+            else if (controller_style_recommended(self.displayedRequirements.styles,cs_style(tokens[i]))) title = [title stringByAppendingString:@" • Recommended"];
             [style addItemWithTitle:title]; style.lastItem.representedObject = tokens[i]; if ([choice[@"style"] isEqual:tokens[i]]) [style selectItem:style.lastItem]; }
         style.target = self; style.action = @selector(choiceChanged:);
         NSTextField *name = [self label:[NSString stringWithFormat:@"%@ · %lu", device[@"name"] ?: @"Controller", (unsigned long)index] size:14 weight:NSFontWeightSemibold];
@@ -286,7 +287,8 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
         NSString *warning = nil;
         BOOL slotSupported = assigned == 1 && [effective[@"style"] isEqual:@"handheld"]
             ? (game.ids & (1u << 8)) != 0 : controller_player_supported(game, assigned);
-        if (assigned && !slotSupported) warning = @"Choose a player slot listed in the game requirements.";
+        if (assigned && effective[@"pairComplete"] && ![effective[@"pairComplete"] boolValue]) warning = @"Assign both sides to complete this player’s pair.";
+        else if (assigned && !slotSupported) warning = @"Choose a player slot listed in the game requirements.";
         else if (assigned && !(game.styles & cs_style(effective[@"style"]))) warning = @"Change “Game sees” to a type listed above.";
         if (warning) name.stringValue = [name.stringValue stringByAppendingString:@" • Not ready"];
         NSTextField *badge = [self label:assigned && !warning ? @"✓ Ready" : !assigned ? @"Unassigned" : @"" size:11 weight:NSFontWeightMedium];
@@ -302,6 +304,19 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
         NSStackView *controls = [NSStackView stackViewWithViews:@[playerField, styleField]];
         controls.spacing = 16; controls.distribution = NSStackViewDistributionFillEqually;
         NSStackView *content = [self column:@[header, controls] spacing:14];
+        if ([choice[@"style"] isEqual:@"pair"]) {
+            DmControllerPopup *role=[[DmControllerPopup alloc] initWithFrame:NSZeroRect pullsDown:NO];
+            role.deviceID=key; role.roleChoice=YES; role.identifier=[@"role." stringByAppendingString:key];
+            NSArray *titles=@[@"One controller",@"Left controller",@"Right controller"], *values=@[@"both",@"left",@"right"];
+            for (NSUInteger i=0;i<3;i++) { [role addItemWithTitle:titles[i]]; role.lastItem.representedObject=values[i]; }
+            [role selectItemAtIndex:cs_role(choice)]; role.target=self; role.action=@selector(choiceChanged:);
+            NSStackView *field=[self column:@[[self label:@"Pair input" size:11 weight:NSFontWeightMedium],role] spacing:5];
+            [content addArrangedSubview:field]; [field.widthAnchor constraintEqualToAnchor:content.widthAnchor].active=YES;
+            if (!cs_role(choice)) {
+                NSTextField *hint=[self label:@"Both Joy-Cons share this controller's motion. Separate hand movements need two controllers." size:12 weight:NSFontWeightRegular];
+                hint.textColor=NSColor.secondaryLabelColor; [content addArrangedSubview:hint]; [hint.widthAnchor constraintEqualToAnchor:content.widthAnchor].active=YES;
+            }
+        }
         if (warning) {
             NSTextField *hint = [self label:warning size:12 weight:NSFontWeightRegular];
             hint.textColor = NSColor.secondaryLabelColor;
@@ -326,13 +341,37 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
 }
 - (void)choiceChanged:(DmControllerPopup *)sender {
     NSString *key = sender.deviceID; NSMutableDictionary *choice = [self.drafts[key] mutableCopy]; if (!choice) return;
-    if (sender.styleChoice) choice[@"style"] = sender.selectedItem.representedObject;
+    if (sender.roleChoice) {
+        NSString *role=sender.selectedItem.representedObject;
+        if (![role isEqual:@"both"] && [choice[@"player"] intValue]<=0)
+            for (NSDictionary *resolved in self.resolved) if ([resolved[@"id"] isEqual:key]) choice[@"player"]=resolved[@"player"];
+        for (NSString *other in self.drafts.allKeys) if (![other isEqual:key] && [choice[@"player"] intValue]>0 && [self.drafts[other][@"player"] isEqual:choice[@"player"]]) {
+            NSMutableDictionary *peer=[self.drafts[other] mutableCopy];
+            if ([role isEqual:@"both"] || ![peer[@"style"] isEqual:@"pair"] || !cs_role(peer) || ([peer[@"role"] isEqual:role] && !cs_role(choice))) {
+                peer[@"player"]=@(-1); peer[@"role"]=@"both";
+            } else if ([peer[@"role"] isEqual:role]) peer[@"role"]=choice[@"role"];
+            self.drafts[other]=peer;
+        }
+        choice[@"role"]=role;
+    } else if (sender.styleChoice) {
+        choice[@"style"] = sender.selectedItem.representedObject;
+        if (![choice[@"style"] isEqual:@"pair"]) {
+            choice[@"role"]=@"both";
+            for (NSString *other in self.drafts.allKeys) if (![other isEqual:key] && [choice[@"player"] intValue]>0 && [self.drafts[other][@"player"] isEqual:choice[@"player"]]) {
+                NSMutableDictionary *peer=[self.drafts[other] mutableCopy]; peer[@"player"]=@(-1); peer[@"role"]=@"both"; self.drafts[other]=peer;
+            }
+        }
+    }
     else {
         NSInteger player = sender.selectedTag;
-        if (player > 0) for (NSString *other in self.drafts.allKeys) if (![other isEqual:key] && [self.drafts[other][@"player"] integerValue] == player) {
-            NSMutableDictionary *displaced = [self.drafts[other] mutableCopy]; displaced[@"player"] = choice[@"player"]; self.drafts[other] = displaced;
+        if (player > 0) for (NSString *other in self.drafts.allKeys) if (![other isEqual:key] && [self.drafts[other][@"player"] integerValue] == player && !cs_can_share(choice,self.drafts[other])) {
+            NSMutableDictionary *displaced = [self.drafts[other] mutableCopy];
+            NSUInteger occupants=0; for (NSDictionary *c in self.drafts.allValues) if ([c[@"player"] integerValue]==player) occupants++;
+            BOOL swaps=occupants==1 && !cs_role(choice) && !cs_role(displaced);
+            displaced[@"player"] = swaps ? choice[@"player"] : @(-1); if (!swaps) displaced[@"role"]=@"both";
+            self.drafts[other] = displaced;
         }
-        choice[@"player"] = @(player);
+        choice[@"player"] = @(player); if (player<=0) choice[@"role"]=@"both";
     }
     self.drafts[key] = choice;
     [self refresh];

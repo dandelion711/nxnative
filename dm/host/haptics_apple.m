@@ -39,6 +39,7 @@
 static dispatch_queue_t queue;
 static NSMutableArray<DmRumbleChannel *> *channels[DM_PLAYERS];
 static GCController *controllers[DM_PLAYERS];
+static GCController *pairControllers[DM_PLAYERS][2];
 #if TARGET_OS_IPHONE
 static BOOL phoneSupported;
 #endif
@@ -419,11 +420,34 @@ static void configure(int p, GCController *controller) {
 #endif
     dm_haptics_route(p, channels[p].count != 0);
 }
+void dm_haptics_apple_pair(int p, GCController *left, GCController *right) {
+    if (!queue || p<0 || p>=DM_PLAYERS) return;
+    pthread_mutex_lock(&routeLock);
+    if (pairControllers[p][0]!=left || pairControllers[p][1]!=right || controllers[p]) {
+        pairControllers[p][0]=left; pairControllers[p][1]=right;
+        controllers[p]=nil; dm_haptics_route(p,0);
+        dispatch_sync(queue,^{
+            for (DmRumbleChannel *c in channels[p]) [c stop]; channels[p]=[NSMutableArray new];
+#if !TARGET_OS_IPHONE
+            ds4_release(p);
+#endif
+            NSArray *devices=@[left ?: (id)NSNull.null,right ?: (id)NSNull.null];
+            for (int side=0;side<2;side++) if (devices[side]!=NSNull.null) {
+                GCDeviceHaptics *h=[devices[side] haptics]; NSSet *available=h.supportedLocalities;
+                GCHapticsLocality loc=[available containsObject:GCHapticsLocalityDefault] ? GCHapticsLocalityDefault :
+                    [available containsObject:GCHapticsLocalityLeftHandle] ? GCHapticsLocalityLeftHandle : available.anyObject;
+                if (loc) add_engine(p,side,side ? @"controller right source" : @"controller left source",^CHHapticEngine *(NSError **e) { (void)e; return [h createEngineWithLocality:loc]; });
+            }
+            dm_haptics_route(p,channels[p].count!=0);
+        });
+    }
+    pthread_mutex_unlock(&routeLock);
+}
 void dm_haptics_apple_controller(int p, GCController *controller) {
     if (!queue || p < 0 || p >= DM_PLAYERS) return;
     pthread_mutex_lock(&routeLock);
-    if (controllers[p] != controller) {
-        controllers[p] = controller;
+    if (controllers[p] != controller || pairControllers[p][0] || pairControllers[p][1]) {
+        controllers[p] = controller; pairControllers[p][0]=nil; pairControllers[p][1]=nil;
         dm_haptics_route(p, 0);   // invalidate queued work before changing hardware
         dispatch_sync(queue, ^{ configure(p, controller); });
     }
