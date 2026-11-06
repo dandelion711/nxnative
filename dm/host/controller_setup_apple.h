@@ -59,7 +59,7 @@ static NSString *cs_validate_choices(NSArray *choices, NSDictionary **accepted) 
         if (role && (![role isKindOfClass:NSString.class] || ![@[@"both",@"left",@"right"] containsObject:role])) return @"Invalid pair role.";
         if (cs_role(row) && (![style isEqual:@"pair"] || player.intValue <= 0)) return @"Choose a player and Joy-Con pair before assigning a pair role.";
         NSString *physicalSide=cs_source_info[key][@"physicalSide"];
-        if (physicalSide && [style isEqual:@"pair"] && ![role isEqual:physicalSide])
+        if (physicalSide && player.intValue!=0 && [style isEqual:@"pair"] && ![role isEqual:physicalSide])
             return @"Use the physical Joy-Con side as this controller's pair input.";
         if (!cs_devices[key]) return @"A controller disconnected. Choose a connected controller and try again.";
         if (player.intValue > 0) {

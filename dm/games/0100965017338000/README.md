@@ -47,6 +47,8 @@ On the Mac (headless, docked): from a fresh save the opening movie with sound, t
 
 General changes first needed here; each applies to every game:
 
+- **Player count selection during controller setup** now respects single-mode and pair-permission request flags ([mechanism and limits](../../../docs/reference/services.md#player-count-in-controller-support-requests)). Automated coverage is recorded there. The game's exact flags for the reported one-player pairing case and gameplay validation remain pending.
+
 - **Two-source Joy-Con pair configuration** now has synthetic input, independent-motion and rumble coverage ([mechanism and limits](../../../docs/reference/services.md#two-physical-controllers-for-one-joy-con-pair)). Gameplay and physical-device checks of this addition are pending.
 - **Live controller configuration** was requested for this game ([engine mechanism](../../../docs/reference/services.md#live-controller-reconfiguration-on-mac-and-ios)). See the controller-type section below for automated coverage and the contributor's macOS/iOS feature-testing report.
 - **Bezel Engine 2.9 archives** (`bea_members` reads inline entries): [Bezel Engine 2.9 archives keep their entries inline](../../../docs/reference/shaders.md#bezel-engine-29-archives-keep-their-entries-inline).

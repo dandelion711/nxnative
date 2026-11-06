@@ -83,3 +83,42 @@ static NSString *cs_pair_error(NSArray *choices) {
         return @"Assign a left and a right controller to the same player to complete the pair.";
     return nil;
 }
+
+static inline int controller_player_capacity(dm_controller_requirements game) {
+    uint32_t external=game.styles & (DM_STYLE_PRO|DM_STYLE_PAIR|DM_STYLE_LEFT|DM_STYLE_RIGHT);
+    int n=external ? __builtin_popcount(game.ids & 0xffu) : 0;
+    if ((game.styles & 2u) && (game.ids & (1u<<8)) && (!external || !(game.ids & 1u))) n++;
+    return MIN(DM_PLAYERS,n);
+}
+// Plan only: preserve complete pair groups and device order within a player.
+// Apply still validates real ready players against the game's current limits.
+static NSArray *controller_choices_for_count(NSArray *choices, NSArray *resolved, int wanted, uint32_t ids) {
+    NSMutableDictionary *routes=[NSMutableDictionary new], *groups=[NSMutableDictionary new];
+    NSMutableArray *ordered=[NSMutableArray new];
+    for (NSDictionary *r in resolved) routes[r[@"id"]]=r;
+    for (NSDictionary *c in choices) {
+        NSString *key=c[@"id"]; NSDictionary *route=routes[key]; if (!route) continue;
+        int player=[route[@"player"] intValue];
+        NSString *group=cs_role(c) && [c[@"player"] intValue]>0 ? [NSString stringWithFormat:@"pair.%@",c[@"player"]] : key;
+        if (!groups[group]) { groups[group]=[NSMutableArray new]; [ordered addObject:@{@"key":group,@"player":@(player>0 ? player : DM_PLAYERS+1),@"order":@(ordered.count)}]; }
+        [groups[group] addObject:c];
+    }
+    [ordered sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b) { NSComparisonResult byPlayer=[a[@"player"] compare:b[@"player"]]; return byPlayer==NSOrderedSame ? [a[@"order"] compare:b[@"order"]] : byPlayer; }];
+    NSMutableArray *slots=[NSMutableArray new];
+    for (int p=0;p<DM_PLAYERS;p++) if (ids>>p&1) [slots addObject:@(p+1)];
+    if (!slots.count && (ids&(1u<<8))) [slots addObject:@1];
+    NSMutableDictionary *next=[NSMutableDictionary new]; int n=0;
+    for (NSDictionary *g in ordered) {
+        NSArray *members=groups[g[@"key"]];
+        BOOL take=n<wanted && n<(int)slots.count;
+        for (NSDictionary *c in members) {
+            NSMutableDictionary *row=[c mutableCopy]; row[@"player"]=take ? slots[n] : @0;
+            if (!take) row[@"role"]=@"both";
+            next[row[@"id"]]=row;
+        }
+        if (take) n++;
+    }
+    NSMutableArray *result=[NSMutableArray new];
+    for (NSDictionary *c in choices) [result addObject:next[c[@"id"]] ?: c];
+    return result;
+}

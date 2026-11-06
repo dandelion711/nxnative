@@ -270,6 +270,14 @@ Most service calls can be found before they crash, before the first boot or the 
 
 ## Input
 
+### Player count in controller support requests
+
+- **Symptom:** combining two controllers as one Joy-Con pair leaves only one player ready, and the controller sheet has no way to choose a different allowed player count. A single-player request can also appear to require multiple players.
+- **Cause:** the host used only the controller-support argument's raw minimum and maximum, ignoring `enable_single_mode` and `enable_permit_joy_dual`. The UI validated assignments against that range without offering a count choice. A pair is one logical player, regardless of how many physical sources supply it.
+- **Fix:** `hle_hid.c` scopes effective requirements to pending support requests. Single mode overrides the count to one, and a request that disallows JoyDual excludes that style during setup. The Mac requirements card and iOS requirements section offer Automatic plus counts within the effective range and supported slot/style capacity. Automatic keeps the existing allocator. Choosing a count edits the draft, retains configured left/right pairs as one group and unassigns excess groups. Returning to Automatic restores the draft from before count selection while retaining later manual edits. Apply requires exactly the selected count of real ready players and rechecks the game's limits under the HID barrier. Cancel changes no live routes. Count choices are not saved and do not add another split, merge, mapping or motion setting. Native argument fields follow [libnx's controller-support declarations](https://github.com/switchbrew/libnx/blob/master/nx/include/switch/applets/hid_la.h).
+- **Found on:** requested for [Super Mario Party Jamboree](../../dm/games/0100965017338000/README.md#controller-type-configuration). Automated tests cover single-mode normalization, pair permission, request cleanup, backend bounds, dynamic count options, draft-only changes, Automatic restoration and retaining a two-source pair. Mac and iOS sources compile, with native Mac UI fixture coverage. No new gameplay or physical-device validation is claimed. Jamboree's actual request flags for the reported case have not been captured.
+- **Limits:** the picker cannot reduce a genuine fixed two-player requirement, alter a running game's roster or create a missing controller or sensor. In those cases change the player count through the game's own menu. It does not emulate every native controller applet option, such as takeover ordering or identification colors.
+
 ### Explicit controller types in a Mac game launch
 
 - **Symptom:** a motion game requires a Joy-Con, but the host reports every physical controller as FullKey or Handheld. The launch wrapper cannot identify the host's devices by controller name or list position, especially with two identical controllers.

@@ -729,6 +729,29 @@ static void t_two_source_pair(void) {
     dm_pad_style(0,DM_STYLE_AUTO,0); dm_pad_explicit(0); dm_pad_players(1); h_hid_SetStyles(0xffffffffu);
 }
 
+static int support_low, support_high; static uint32_t support_styles;
+static int support_options_hook(int minimum,int maximum) {
+    support_low=minimum; support_high=maximum;
+    int low,high; dm_controller_setup_requirements(&support_styles,NULL,&low,&high);
+    CHECK(low==minimum && high==maximum,"native sheet and engine share the effective request limits");
+    return 1;
+}
+static void t_support_options(void) {
+    g_mode=1; ids((uint32_t[]){0,1},2); h_hid_SetStyles(0x1f);
+    dm_pad_explicit(0); dm_pad_style(0,DM_STYLE_AUTO,0); dm_pad_style(1,DM_STYLE_AUTO,0); dm_pad_players(3);
+    int8_t arg[8]={2,4,1,1,1,1}; int32_t info[2]; dm_controller_support_hook=support_options_hook;
+    CHECK(h_hid_ShowCtrl(info,arg)==RES_OK && support_low==1 && support_high==1 && info[0]==1,"single mode overrides the raw multiplayer range and returns one player");
+    CHECK(support_styles & STYLE_JOYDUAL,"a permitted Joy-Con pair stays available to setup");
+    int low,high; dm_controller_setup_requirements(NULL,NULL,&low,&high);
+    CHECK(low==0 && high==DM_PLAYERS,"finishing the request releases its temporary count constraints");
+    dm_pad_explicit(1); dm_pad_style(0,DM_STYLE_PAIR,0); dm_pad_players(1);
+    arg[4]=0;
+    CHECK(h_hid_ShowCtrl(info,arg)==RES_CTRL_CANCELED && !(support_styles&STYLE_JOYDUAL) && !info[0],"an unpermitted pair cannot satisfy a request even if a UI reports Apply");
+    arg[4]=1;
+    CHECK(h_hid_ShowCtrl(info,arg)==RES_OK && info[0]==1,"two-hand pair style is one player in single mode");
+    dm_controller_support_hook=NULL; dm_pad_style(0,DM_STYLE_AUTO,0); dm_pad_explicit(0); dm_pad_players(1); h_hid_SetStyles(0xffffffffu);
+}
+
 int main(void) {
     CHECK(setenv("DM_RUMBLE_LOG", "1", 1) == 0, "enable rumble diagnostics");
     t_slots();
@@ -757,6 +780,7 @@ int main(void) {
     t_ios_touch_fallback();
     t_ios_automatic_compatibility();
     t_two_source_pair();
+    t_support_options();
     printf("hid players: %d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

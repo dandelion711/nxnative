@@ -59,7 +59,7 @@ static NSArray *controller_assignment_resolve(dm_controller_host host, NSArray *
 }
 static dm_controller_requirements controller_assignment_requirements(dm_controller_host host) {
     dm_controller_requirements game;
-    dm_pad_supported(&game.styles, &game.ids);
+    dm_controller_setup_requirements(&game.styles, &game.ids, NULL, NULL);
     int docked = host.mode();
     BOOL supported = (game.styles & (docked ? DM_STYLE_PRO : 2u)) && (game.ids & (docked ? 1u : 1u << 8));
     game.fallback = supported ? DM_FALLBACK_IF_PLAYER_ONE_FREE : DM_FALLBACK_NONE;
@@ -74,6 +74,8 @@ static NSString *controller_assignment_apply(dm_controller_host host, NSArray *c
     error=cs_pair_error(choices); if (error && !cs_pair_reconciling) return error;
     dm_pad_reconfigure_begin();
     @try {
+        int low=0,high=DM_PLAYERS; dm_controller_setup_requirements(NULL,NULL,&low,&high);
+        minimum=MAX(minimum,low); maximum=MIN(maximum,high);
         NSArray *resolved = controller_assignment_resolve(host, choices);
         int count = controller_ready_players(controller_assignment_requirements(host), resolved, NULL);
         if (count < minimum || count > maximum) return @"Assign the number of supported controllers this game requests.";

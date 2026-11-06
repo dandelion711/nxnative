@@ -28,6 +28,7 @@
 static NSArray *devices;
 static uint32_t configured[DM_PLAYERS], supported = 0x1f, supportedIDs = 0x3ff, connected, reset;
 static uint64_t generations[DM_PLAYERS];
+static int requestMin, requestMax=DM_PLAYERS;
 static int depth, published, samples[DM_PLAYERS], keepCalls, readCalls;
 static GCController *routed[DM_PLAYERS];
 static uint32_t grouped_sides[DM_PLAYERS];
@@ -40,6 +41,10 @@ static void readPad(GCExtendedGamepad *pad) { (void)pad; readCalls++; }
 static void keep(GCController *device) { (void)device; keepCalls++; }
 static void changed(GCController *device) { (void)device; assert(depth == 1); published++; }
 void dm_pad_supported(uint32_t *styles, uint32_t *ids) { *styles = supported; *ids = supportedIDs; }
+void dm_controller_setup_requirements(uint32_t *styles,uint32_t *ids,int *minimum,int *maximum) {
+    if (styles) *styles=supported; if (ids) *ids=supportedIDs;
+    if (minimum) *minimum=requestMin; if (maximum) *maximum=requestMax;
+}
 uint32_t dm_pad_configured_style(int player) { return configured[player]; }
 void dm_pad_reconfigure_begin(void) { assert(!depth); depth++; }
 void dm_pad_reconfigure_reset(uint32_t mask) { assert(depth == 1); reset = mask; for (int p = 0; p < DM_PLAYERS; p++) if (mask >> p & 1) generations[p]++; }
@@ -225,6 +230,11 @@ int main(void) { @autoreleasepool {
     assert(controller_assignment_apply(host, @[swapped[0], @{@"id": bid, @"player": @2, @"style": @"right"}], 0, 8, &affected));
     assert(published == before && !depth && !routing.count && held[0] == (id)b);
     assert(controller_assignment_apply(host, swapped, 4, 8, &affected) && !depth && published == before && !routing.count);
+    requestMin=4;
+    assert(controller_assignment_apply(host, swapped, 1, 8, &affected) && !depth && published==before && !routing.count);
+    requestMin=0; requestMax=2;
+    assert(controller_assignment_apply(host, swapped, 1, 8, &affected) && !depth && published==before && !routing.count);
+    requestMax=DM_PLAYERS;
     supported = DM_STYLE_PAIR; assert(controller_assignment_apply(host, swapped, 1, 8, &affected) && published == before); supported = 0x1f;
     devices = @[a, c]; assert(controller_assignment_apply(host, swapped, 1, 8, &affected) && published == before && !routing.count);
     NSArray *withoutB = @[swapped[0], initial[2]];

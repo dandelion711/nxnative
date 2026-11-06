@@ -689,16 +689,44 @@ HLE_FORCE("_ZN2nn3hid20StopLrAssignmentModeEv", "L/R assignment mode; ignored by
 // (Mario Kart 8 Deluxe's 2P request, issue #550). Returning OK below the minimum makes
 // that game reopen its controller applet endlessly.
 #define RES_CTRL_CANCELED (202u | 3101u << 9)
+typedef struct controller_request {
+    int minimum, maximum; unsigned permit_pair, single;
+    struct controller_request *next;
+} controller_request;
+static controller_request *g_controller_requests; // protected by the HID barrier
+void dm_controller_setup_requirements(uint32_t *styles, uint32_t *ids, int *minimum, int *maximum) { HID_GUARD;
+    uint32_t allowed=atomic_load(&g_styles_supported); int low=0, high=DM_PLAYERS;
+    for (controller_request *r=g_controller_requests;r;r=r->next) {
+        if (r->minimum>low) low=r->minimum;
+        if (r->maximum<high) high=r->maximum;
+        if (!r->permit_pair) allowed&=~STYLE_JOYDUAL;
+    }
+    if (styles) *styles=allowed; if (ids) *ids=atomic_load(&g_ids_supported);
+    if (minimum) *minimum=low; if (maximum) *maximum=high;
+}
 static Result ctrl_support(int32_t *info, const int8_t *arg) {
-    // The guest waits outside the HID lock while the main thread runs the native sheet.
-    int answer = dm_controller_support_hook ? dm_controller_support_hook(arg ? arg[0] : 1, arg && arg[1] > 0 ? arg[1] : DM_PLAYERS) : -1;
+    controller_request request={.minimum=arg ? arg[0] : 1,.maximum=arg && arg[1]>0 ? arg[1] : DM_PLAYERS,
+        .permit_pair=!arg || arg[4]!=0,.single=arg && arg[5]!=0};
+    if (request.minimum<0) request.minimum=0; if (request.minimum>DM_PLAYERS) request.minimum=DM_PLAYERS;
+    if (request.maximum>DM_PLAYERS) request.maximum=DM_PLAYERS;
+    if (request.single) request.minimum=request.maximum=1;
+    { HID_GUARD; request.next=g_controller_requests; g_controller_requests=&request; }
+    // Keep the guest outside the HID barrier while its native sheet is open.
+    int answer=dm_controller_support_hook ? dm_controller_support_hook(request.minimum,request.maximum) : -1;
     HID_GUARD;
-    int count = 0; uint32_t selected = connected_id();
-    for (int p = 0; p < DM_PLAYERS; p++) if (style_of(dm_player_npad(p))) { if (!count) selected = dm_player_npad(p); count++; }
-    int canceled = answer == 0 || (arg && arg[0] > count);
-    if (arg) LOG("hid controller applet: %d to %d players wanted, %d connected%s", arg[0], arg[1], count, answer == 0 ? ": canceled in controller setup" : canceled ? ": too few, canceled" : "");
-    if (arg && arg[1] > 0 && count > arg[1]) count = arg[1];
-    if (info) { info[0] = count; info[1] = (int32_t)selected; }
+    controller_request **link=&g_controller_requests;
+    while (*link && *link!=&request) link=&(*link)->next;
+    if (*link) *link=request.next;
+    int count=0; uint32_t selected=connected_id();
+    for (int p=0;p<DM_PLAYERS;p++) {
+        uint32_t style=style_of(dm_player_npad(p));
+        if (!style || (!request.permit_pair && style==STYLE_JOYDUAL)) continue;
+        if (!count) selected=dm_player_npad(p); count++;
+    }
+    int canceled=answer==0 || count<request.minimum;
+    LOG("hid controller applet: requested %d to %d, effective %d to %d players, single=%u, pair=%u, %d connected%s",arg ? arg[0] : 1,arg ? arg[1] : DM_PLAYERS,request.minimum,request.maximum,request.single,request.permit_pair,count,canceled ? ": canceled" : "");
+    if (count>request.maximum) count=request.maximum;
+    if (info) { info[0]=count; info[1]=(int32_t)selected; }
     return canceled ? RES_CTRL_CANCELED : RES_OK;
 }
 HLE_FORCE("_ZN2nn3hid21ShowControllerSupportEPNS0_27ControllerSupportResultInfoERKNS0_20ControllerSupportArgE", "controller applet: native configuration or existing-player fallback",

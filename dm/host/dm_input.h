@@ -38,6 +38,10 @@ void dm_motion_clear_side(int player, int role);
 void dm_pad_explicit(int enabled);   // explicit player slots never merge into player 1
 uint32_t dm_pad_configured_style(int player);
 void dm_pad_supported(uint32_t *styles, uint32_t *ids);
+// Effective limits while controller-support requests are pending. Outside an
+// applet this returns the game's ordinary styles/IDs and the range 0..8.
+void dm_controller_setup_requirements(uint32_t *styles, uint32_t *ids, int *minimum, int *maximum);
+
 // A live reassignment holds this barrier across detach, state clearing and reattach.
 // Guest readers see either complete configuration. Only affected players lose motion history.
 void dm_pad_reconfigure_begin(void);
