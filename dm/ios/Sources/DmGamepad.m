@@ -665,6 +665,7 @@ static NSDictionary *route_status(dm_ios_routes plan, NSArray<NSArray<GCControll
     int minimum = 0, maximum = DM_PLAYERS;
     if (inGame) dm_ios_controller_limits(&minimum, &maximum);
     return @{@"minimum": @(minimum), @"maximum": @(maximum), @"styles": types, @"players": players,
+        @"requiredStyle": controller_required_style(styles) ?: @"",
         @"ready": @(__builtin_popcount(ready) + touch), @"touch": @(touch), @"routes": routes};
 }
 

@@ -53,3 +53,10 @@ static inline NSString *controller_recommended_style(uint32_t supported, int pla
     if (supported & DM_STYLE_RIGHT) return @"right";
     return nil;
 }
+
+// The badge names a sole accepted type. A suggested draft may still choose
+// between several accepted types, and does not imply physical sensor support.
+static inline NSString *controller_required_style(uint32_t supported) {
+    if (!supported || (supported & (supported - 1u))) return nil;
+    return controller_recommended_style(supported, 0);
+}

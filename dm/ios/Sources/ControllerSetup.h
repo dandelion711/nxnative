@@ -6,6 +6,7 @@ NS_ASSUME_NONNULL_BEGIN
 NSArray<NSDictionary<NSString *, id> *> *dm_ios_controller_snapshot(void);
 NSString * _Nullable dm_ios_controller_configure(NSArray<NSDictionary<NSString *, id> *> *choices);
 BOOL dm_ios_controller_identify(NSString *deviceID);
+// Status includes requiredStyle, empty unless one external style is the only accepted style.
 NSDictionary<NSString *, id> *dm_ios_controller_status(NSArray<NSDictionary<NSString *, id> *> *choices, BOOL inGame);
 NSString * _Nullable dm_ios_controller_apply(NSArray<NSDictionary<NSString *, id> *> *choices);
 // Updated when another game request joins an open sheet.

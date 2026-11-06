@@ -80,7 +80,22 @@ int main(int argc, char **argv) { @autoreleasepool {
 
     DmControllerPopup *types = popup(ui.panel.window.contentView, @"style.a");
     assert([types.itemArray[0].title hasSuffix:@" • Automatic"]);
-    assert([types.itemArray[1].title isEqual:@"Pro Controller • Recommended"]);
+    assert([types.itemArray[1].title isEqual:@"Pro Controller"]);
+    // Badges describe one accepted type, not every compatible item. Include
+    // handheld and unknown flags so a filtered UI list cannot invent a singleton.
+    NSArray *masks = @[@0, @0x1f, @2, @3, @5, @24, @0xffffffffu, @33, @1, @4, @8, @16];
+    for (NSNumber *mask in masks) {
+        game.styles = mask.unsignedIntValue; [ui refresh];
+        DmControllerPopup *menu = popup(ui.panel.window.contentView, @"style.a");
+        NSUInteger badges = 0;
+        for (NSMenuItem *option in menu.itemArray) if ([option.title hasSuffix:@" • Recommended"]) {
+            badges++;
+            assert(cs_style(option.representedObject) == game.styles);
+        }
+        assert(badges == (game.styles == 1 || game.styles == 4 || game.styles == 8 || game.styles == 16 ? 1u : 0u));
+    }
+    game.styles = 0x1f; [ui refresh];
+
     NSButton *identify = identifyButton(ui.panel.window.contentView, @"b");
     assert(identify && [identify.title isEqual:@"Identify"]);
     [identify sendAction:identify.action to:identify.target];

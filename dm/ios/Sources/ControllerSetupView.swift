@@ -39,6 +39,7 @@ struct ControllerSetupView: View {
         let minimum: Int
         let maximum: Int
         let styles: [Style]
+        let requiredStyle: Style?
         let players: [Int]
         let ready: Int
         let touch: Bool
@@ -48,6 +49,7 @@ struct ControllerSetupView: View {
             minimum = status["minimum"] as? Int ?? 0
             maximum = status["maximum"] as? Int ?? 8
             styles = (status["styles"] as? [String] ?? []).compactMap(Style.init(rawValue:))
+            requiredStyle = (status["requiredStyle"] as? String).flatMap(Style.init(rawValue:))
             players = status["players"] as? [Int] ?? []
             ready = status["ready"] as? Int ?? 0
             touch = status["touch"] as? Bool ?? false
@@ -274,7 +276,7 @@ struct ControllerSetupView: View {
             let title = route.automaticStyle == "handheld" ? String(localized: "Handheld") : Style(rawValue: route.automaticStyle)?.title ?? style.title
             return "\(title) • " + String(localized: "Automatic")
         }
-        if inGame, readiness?.styles.contains(style) == true {
+        if inGame, readiness?.requiredStyle == style {
             return style.title + " • " + String(localized: "Recommended")
         }
         return style.title

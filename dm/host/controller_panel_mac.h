@@ -273,7 +273,7 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
         for (NSUInteger i = 0; i < tokens.count; i++) {
             NSString *title = labels[i];
             if (i == 0) title = [NSString stringWithFormat:@"%@ • Automatic", [effective[@"automaticStyle"] isEqual:@"handheld"] ? @"Handheld" : @"Pro Controller"];
-            else if (self.displayedRequirements.styles & cs_style(tokens[i])) title = [title stringByAppendingString:@" • Recommended"];
+            else if ([controller_required_style(self.displayedRequirements.styles) isEqual:tokens[i]]) title = [title stringByAppendingString:@" • Recommended"];
             [style addItemWithTitle:title]; style.lastItem.representedObject = tokens[i]; if ([choice[@"style"] isEqual:tokens[i]]) [style selectItem:style.lastItem]; }
         style.target = self; style.action = @selector(choiceChanged:);
         NSTextField *name = [self label:[NSString stringWithFormat:@"%@ · %lu", device[@"name"] ?: @"Controller", (unsigned long)index] size:14 weight:NSFontWeightSemibold];
