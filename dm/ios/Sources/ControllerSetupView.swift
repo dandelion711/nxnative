@@ -214,7 +214,8 @@ struct ControllerSetupView: View {
             if status.styles.isEmpty {
                 Text("No external controller types accepted")
             } else {
-                LabeledContent("Accepted types", value: status.styles.map(\.title).joined(separator: ", "))
+                LabeledContent("Accepted types", value: Style.allCases.filter { $0 != .auto }.allSatisfy { status.styles.contains($0) }
+                    ? String(localized: "Any") : status.styles.map(\.title).joined(separator: ", "))
             }
             if status.players.isEmpty {
                 Text("No external player slots available")

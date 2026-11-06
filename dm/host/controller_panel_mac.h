@@ -199,7 +199,9 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
     NSArray *tokens = controller_style_tokens(), *labels = controller_style_labels();
     NSMutableArray *types = [NSMutableArray new], *slots = [NSMutableArray new];
     for (NSUInteger i = 0; i < tokens.count; i++) if (game.styles & cs_style(tokens[i])) [types addObject:labels[i]];
-    [details addObject:types.count ? [NSString stringWithFormat:@"Controller type   %@", [types componentsJoinedByString:@" or "]] : @"No external controller types accepted"];
+    uint32_t selectable=DM_STYLE_PRO|DM_STYLE_PAIR|DM_STYLE_LEFT|DM_STYLE_RIGHT;
+    NSString *acceptedTypes=(game.styles & selectable)==selectable ? @"Any" : [types componentsJoinedByString:@" or "];
+    [details addObject:types.count ? [NSString stringWithFormat:@"Controller type   %@", acceptedTypes] : @"No external controller types accepted"];
     for (int p = 1; p <= DM_PLAYERS; p++) if (controller_player_supported(game, p)) [slots addObject:@(p).stringValue];
     if (slots.count < DM_PLAYERS)
         [details addObject:slots.count ? [NSString stringWithFormat:@"Player slots          %@", [slots componentsJoinedByString:@", "]] : @"No external player slots available"];
