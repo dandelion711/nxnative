@@ -68,7 +68,16 @@ int main(int argc, char **argv) { @autoreleasepool {
     [item.menu performActionForItemAtIndex:0];
     assert(ui.panel && parent.attachedSheet == ui.panel.window && opened == 1);
     DmControllerPopup *automatic = popup(ui.panel.window.contentView, @"player.a");
-    assert([[automatic.menu itemWithTag:-1].title hasSuffix:@" • Automatic"]);
+    assert([[automatic.menu itemWithTag:-1].title isEqual:@"Automatic"]); // a fixed choice never claims to be Automatic
+    selectPlayer(ui.panel, @"a", -1);
+    automatic = popup(ui.panel.window.contentView, @"player.a");
+    assert([automatic.selectedItem.title isEqual:@"Player 1 • Automatic"] && ![automatic.menu itemWithTag:1]);
+    assert(automatic.numberOfItems == 9 && [automatic.menu itemWithTag:2]);
+    selectPlayer(ui.panel, @"a", 3);
+    automatic = popup(ui.panel.window.contentView, @"player.a");
+    assert(automatic.selectedTag == 3 && [[automatic.menu itemWithTag:-1].title isEqual:@"Automatic"] && [automatic.menu itemWithTag:1]);
+    selectPlayer(ui.panel, @"a", 1); // restore the fixture's original fixed assignment
+
     DmControllerPopup *types = popup(ui.panel.window.contentView, @"style.a");
     assert([types.itemArray[0].title hasSuffix:@" • Automatic"]);
     assert([types.itemArray[1].title isEqual:@"Pro Controller • Recommended"]);

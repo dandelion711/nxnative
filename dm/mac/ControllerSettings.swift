@@ -112,6 +112,18 @@ final class ControllerSettingsModel: ObservableObject {
         return nil
     }
 
+    // The Automatic row stands for its resolved player. Offer that player
+    // once, while retaining the full fixed-player list after a manual choice.
+    func playerSlots(for id: String) -> [Int] {
+        let automatic = choices[id]?.player == -1 ? resolvedPlayer(for: id) : nil
+        return (1...8).filter { $0 != automatic }
+    }
+
+    func automaticPlayerLabel(for id: String) -> String {
+        guard choices[id]?.player == -1, let player = resolvedPlayer(for: id) else { return "Automatic" }
+        return "Player \(player) • Automatic"
+    }
+
     func automaticStyle(for id: String) -> String {
         resolvedPlayer(for: id) == 1 && operationMode() == "0" ? "Handheld" : "Pro Controller"
     }
@@ -152,9 +164,9 @@ struct ControllerSettingsFields: View {
                     Picker("Player", selection: Binding(
                         get: { model.choices[controller.id]?.player ?? 0 },
                         set: { model.choosePlayer($0 == 0 ? nil : $0, for: controller.id) })) {
-                        Text(model.resolvedPlayer(for: controller.id).map { "Player \($0) • Automatic" } ?? "Automatic").tag(-1)
+                        Text(model.automaticPlayerLabel(for: controller.id)).tag(-1)
                         Text("Unassigned").tag(0)
-                        ForEach(1...8, id: \.self) { Text("Player \($0)").tag($0) }
+                        ForEach(model.playerSlots(for: controller.id), id: \.self) { Text("Player \($0)").tag($0) }
                     }
                     Picker("Game sees", selection: Binding(
                         get: { model.choices[controller.id]?.style ?? .auto },

@@ -96,7 +96,7 @@ struct ControllerSetupView: View {
                                                              set: { assign($0, to: device.id) })) {
                             Text(automaticPlayerLabel(device.id)).tag(-1)
                             Text("Unassigned").tag(0)
-                            ForEach(1...8, id: \.self) { Text("Player \($0)").tag($0) }
+                            ForEach(playerSlots(for: device.id), id: \.self) { Text("Player \($0)").tag($0) }
                         }
                         Picker("Game sees", selection: Binding(get: { style(for: device.id) },
                                                                 set: { setStyle($0, for: device.id) })) {
@@ -258,8 +258,13 @@ struct ControllerSetupView: View {
         return title
     }
 
+    private func playerSlots(for id: String) -> [Int] {
+        let automatic = player(for: id) == -1 ? readiness?.routes[id]?.player : nil
+        return (1...8).filter { $0 != automatic }
+    }
+
     private func automaticPlayerLabel(_ id: String) -> String {
-        guard let route = readiness?.routes[id] else { return String(localized: "Automatic") }
+        guard player(for: id) == -1, let route = readiness?.routes[id], route.player > 0 else { return String(localized: "Automatic") }
         return String(localized: "Player \(route.player) • Automatic")
     }
 

@@ -259,11 +259,13 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
         DmControllerPopup *player = [[DmControllerPopup alloc] initWithFrame:NSZeroRect pullsDown:NO];
         player.deviceID = key; player.identifier = [@"player." stringByAppendingString:key];
         NSDictionary *effective = resolved[key];
-        NSString *automaticPlayer = [effective[@"player"] intValue] > 0
-            ? [NSString stringWithFormat:@"Player %@ • Automatic", effective[@"player"]] : @"Unassigned • Automatic";
+        BOOL isAutomatic = [choice[@"player"] intValue] == -1;
+        int automaticSlot = isAutomatic ? [effective[@"player"] intValue] : -1;
+        NSString *automaticPlayer = automaticSlot > 0
+            ? [NSString stringWithFormat:@"Player %@ • Automatic", effective[@"player"]] : @"Automatic";
         [player addItemWithTitle:automaticPlayer]; player.lastItem.tag = -1;
         [player addItemWithTitle:@"Unassigned"]; player.lastItem.tag = 0;
-        for (int p = 1; p <= 8; p++) { [player addItemWithTitle:[NSString stringWithFormat:@"Player %d", p]]; player.lastItem.tag = p; }
+        for (int p = 1; p <= 8; p++) if (p != automaticSlot) { [player addItemWithTitle:[NSString stringWithFormat:@"Player %d", p]]; player.lastItem.tag = p; }
         [player selectItemWithTag:[choice[@"player"] intValue]]; player.target = self; player.action = @selector(choiceChanged:);
         DmControllerPopup *style = [[DmControllerPopup alloc] initWithFrame:NSZeroRect pullsDown:NO];
         style.deviceID = key; style.styleChoice = YES; style.identifier = [@"style." stringByAppendingString:key];
