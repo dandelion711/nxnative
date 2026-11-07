@@ -81,6 +81,22 @@ A full-size controller assigned as a single Joy-Con maps its primary stick to th
 
 The configuration registry also accepts transport-owned connection descriptors through `cs_update_sources`. Optional `physicalSide`, `automaticPlayer` and `reservedPlayers` fields let a backend describe its existing physical halves and slot policy. They are session metadata, not another settings store. GameController-only clients continue through `cs_update` with the same device names, identities and allocator. `cs_run_registry` allows a Mac backend to supply discovery, Identify and final validation while retaining the existing launch socket protocol. NX2Apple's patched Mac backend uses these hooks for its existing split/HID/Steam registry. The standalone frontend here remains on its current GameController path.
 
+### Controller configuration examples
+
+These captures use the real Mac launch/runtime views with synthetic device and requirement fixtures, not gameplay. Each illustrates a different task. They do not establish iOS rendering or physical-controller behavior.
+
+Launch access keeps the device list behind Configure controllers:
+
+![Game launch access under Controls](images/controllers/mac-launch-access.png)
+
+Runtime requirements explain an incompatible type and disabled Apply:
+
+![Required player count and corrective controller-type guidance](images/controllers/mac-requirements-blocked.png)
+
+Two physical sources share one player through complementary pair roles:
+
+![Two gamepads assigned to Player 1 as a left/right pair](images/controllers/mac-two-controller-pair.png)
+
 Settings a player chose in a front end and wants kept, also for a start from Finder or the Dock, go in the app's saved choices ([Saved choices](#saved-choices)), not in its environment. Controller assignments above are session-only and are not written to this store.
 
 **An IPA** is installed by the player (sideloading); its own settings screen starts the game. Lines in the app's `Documents/env.txt` win over that screen ([Settings in a file](settings.md#settings-in-a-file)). The save and `log.txt` are in the app's Documents folder.
