@@ -671,11 +671,10 @@ static NSDictionary *route_status(dm_ios_routes plan, NSArray<NSArray<GCControll
         int gameMin=0,gameMax=DM_PLAYERS; dm_controller_setup_requirements(NULL,NULL,&gameMin,&gameMax);
         dm_ios_controller_limits(&minimum,&maximum); minimum=MAX(minimum,gameMin); maximum=MIN(maximum,gameMax);
     }
-    dm_controller_requirements capacity={.styles=styles,.ids=ids};
     return @{@"minimum": @(minimum), @"maximum": @(maximum), @"styles": types, @"players": players,
         @"requiredStyle": controller_required_style(styles) ?: @"",
         @"recommendedStyles": styles==(DM_STYLE_LEFT|DM_STYLE_RIGHT) ? @[@"left",@"right"] : controller_required_style(styles) ? @[controller_required_style(styles)] : @[],
-        @"capacity":@(controller_player_capacity(capacity)), @"ready": @(__builtin_popcount(ready) + touch), @"touch": @(touch), @"routes": routes};
+        @"ready": @(__builtin_popcount(ready) + touch), @"touch": @(touch), @"routes": routes};
 }
 
 NSDictionary<NSString *, id> *dm_ios_controller_status(NSArray<NSDictionary<NSString *, id> *> *choices, BOOL inGame) {
@@ -742,7 +741,7 @@ static void publish_routes(dm_ios_routes plan, NSArray<NSMutableArray<GCControll
     dm_pad_players_ios(pad_slot_mask(&plan.slots), plan.manual);
 }
 
-NSString *dm_ios_controller_apply_count(NSArray<NSDictionary<NSString *, id> *> *choices, int wanted) {
+NSString *dm_ios_controller_apply(NSArray<NSDictionary<NSString *, id> *> *choices) {
     if (!g_view || !atomic_load(&g_configuring)) return @"Controller setup is unavailable.";
     NSArray *rows = cs_update(GCController.controllers);
     NSDictionary *next = nil;
@@ -754,7 +753,7 @@ NSString *dm_ios_controller_apply_count(NSArray<NSDictionary<NSString *, id> *> 
     dm_pad_reconfigure_begin();
     NSDictionary *status = route_status(plan, sources, YES);
     int count = [status[@"ready"] intValue];
-    if ((wanted>=0 && count!=wanted) || count < [status[@"minimum"] intValue] || count > [status[@"maximum"] intValue]) {
+    if (count < [status[@"minimum"] intValue] || count > [status[@"maximum"] intValue]) {
         dm_pad_reconfigure_end();
         return @"Assign the number of supported controllers this game requests.";
     }
@@ -763,16 +762,6 @@ NSString *dm_ios_controller_apply_count(NSArray<NSDictionary<NSString *, id> *> 
     dm_pad_reconfigure_end();
     [g_view usePhysicalPads:pad_slot_mask(&plan.slots) != 0];
     return nil;
-}
-
-NSString *dm_ios_controller_apply(NSArray<NSDictionary<NSString *,id> *> *choices) { return dm_ios_controller_apply_count(choices,-1); }
-NSArray *dm_ios_controller_choices_for_count(NSArray *choices,int wanted) {
-    NSDictionary *status=dm_ios_controller_status(choices,YES);
-    if ([status[@"ready"] intValue]==wanted) return choices;
-    NSMutableArray *routes=[NSMutableArray new];
-    for (NSString *key in status[@"routes"]) { NSMutableDictionary *r=[status[@"routes"][key] mutableCopy]; r[@"id"]=key; [routes addObject:r]; }
-    uint32_t ids=0; for (NSNumber *p in status[@"players"]) ids|=1u<<(p.intValue-1);
-    return controller_choices_for_count(choices,routes,wanted,ids);
 }
 
 - (void)padsChanged:(NSNotification *)note {

@@ -50,7 +50,6 @@ struct ControllerSetupView: View {
     private struct Readiness: Equatable {
         let minimum: Int
         let maximum: Int
-        let capacity: Int
         let styles: [Style]
         let requiredStyle: Style?
         let recommendedStyles: [Style]
@@ -62,7 +61,6 @@ struct ControllerSetupView: View {
         init(_ status: [String: Any]) {
             minimum = status["minimum"] as? Int ?? 0
             maximum = status["maximum"] as? Int ?? 8
-            capacity = status["capacity"] as? Int ?? 8
             styles = (status["styles"] as? [String] ?? []).compactMap(Style.init(rawValue:))
             requiredStyle = (status["requiredStyle"] as? String).flatMap(Style.init(rawValue:))
             recommendedStyles = (status["recommendedStyles"] as? [String])?.compactMap(Style.init(rawValue:)) ?? requiredStyle.map { [$0] } ?? []
@@ -99,17 +97,6 @@ struct ControllerSetupView: View {
     @State private var signaled: Set<String> = []
     @State private var recommendedRequirements: [Style]?
     @State private var recommendationSeen: Set<String> = []
-    @State private var playerCountTarget = -1
-    @State private var playerCountBaseline: [String: Device]?
-    private var playerCountOptions: [Int] {
-        guard let status=readiness else { return [] }
-        let lower=max(1,status.minimum), upper=min(status.maximum,status.capacity)
-        return upper>=lower ? Array(lower...upper) : []
-    }
-    private var targetReady: Bool {
-        guard let status=readiness else { return false }
-        return status.canApply && (playerCountTarget<0 || status.ready==playerCountTarget)
-    }
 
     var body: some View {
         NavigationStack {
@@ -180,9 +167,6 @@ struct ControllerSetupView: View {
         }
         .onAppear(perform: refresh)
         .onChange(of: devices) { _, _ in updateReadiness() }
-        .onChange(of: playerCountOptions) { _, options in
-            if playerCountTarget>=0 && !options.contains(playerCountTarget) { playerCountTarget = -1; playerCountBaseline=nil }
-        }
         .task {
             guard inGame else { return }
             while !Task.isCancelled {
@@ -202,15 +186,6 @@ struct ControllerSetupView: View {
     private func requirements(_ status: Readiness) -> some View {
         Section("Game requirements") {
             Text(status.playerCount).font(.headline)
-            Picker("Number of players", selection: Binding(get: { playerCountTarget },set: { choosePlayerCount($0) })) {
-                Text("Automatic").tag(-1)
-                ForEach(playerCountOptions,id: \.self) { n in
-                    Text(n==1 ? String(localized:"1 player") : String(localized:"\(n) players")).tag(n)
-                }
-            }.disabled(playerCountOptions.isEmpty)
-            if status.minimum==status.maximum && status.minimum>1 {
-                Text("Change the number of players in the game to use fewer.").font(.footnote).foregroundStyle(.secondary)
-            }
             if status.styles.isEmpty {
                 Text("No external controller types accepted")
             } else {
@@ -239,13 +214,13 @@ struct ControllerSetupView: View {
                 if status.minimum > status.maximum {
                     Text("Setup unavailable").font(.headline)
                     Text("Cancel this setup and try again.").font(.footnote)
-                } else if status.ready < (playerCountTarget>=0 ? playerCountTarget : status.minimum) {
-                    Text("\(status.ready) of \(playerCountTarget>=0 ? playerCountTarget : status.minimum) players ready").font(.headline)
+                } else if status.ready < status.minimum {
+                    Text("\(status.ready) of \(status.minimum) players ready").font(.headline)
                     Text("Assign the required players to continue.").font(.footnote)
                 } else {
                     Text(status.ready == 1 ? "1 player ready" : "\(status.ready) players ready").font(.headline)
-                    if status.ready > (playerCountTarget>=0 ? playerCountTarget : status.maximum) {
-                        Text("Unassign \(status.ready - (playerCountTarget>=0 ? playerCountTarget : status.maximum)) to continue.").font(.footnote)
+                    if status.ready > status.maximum {
+                        Text("Unassign \(status.ready - status.maximum) to continue.").font(.footnote)
                     } else {
                         Text("Changes apply to this session.").font(.footnote)
                     }
@@ -258,7 +233,7 @@ struct ControllerSetupView: View {
             Spacer(minLength: 0)
             Button("Apply") { save(devices.map(\.choice)) }
                 .buttonStyle(.borderedProminent)
-                .disabled(!targetReady || pairingIssue)
+                .disabled(!status.canApply || pairingIssue)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
@@ -335,17 +310,22 @@ struct ControllerSetupView: View {
     private func style(for id: String) -> Style { devices.first { $0.id == id }?.style ?? .auto }
 
     private func setStyle(_ style: Style, for id: String) {
-        let before=devices
-        defer { rememberCountEdits(before) }
         guard let index = devices.firstIndex(where: { $0.id == id }) else { return }
         if style != .pair { setRole(.both,for:id) }
         devices[index].style = style
     }
 
     private func assign(_ player: Int, to id: String) {
-        let before=devices
-        defer { rememberCountEdits(before) }
         guard let index = devices.firstIndex(where: { $0.id == id }) else { return }
+        if player>0 {
+            let occupants=devices.indices.filter { $0 != index && (devices[$0].player == -1 ? readiness?.routes[devices[$0].id]?.player : devices[$0].player)==player }
+            if occupants.count==1, let other=occupants.first {
+                let side: PairRole = devices[other].role == .both ? .left : devices[other].role
+                devices[other].player=player; devices[other].style = .pair; devices[other].role=side
+                devices[index].player=player; devices[index].style = .pair; devices[index].role = side == .left ? .right : .left
+                return
+            }
+        }
         if player > 0 {
             let others = devices.indices.filter { $0 != index && devices[$0].player == player }
             for other in others {
@@ -370,8 +350,6 @@ struct ControllerSetupView: View {
         return groups.values.contains { $0 != Set([.left,.right]) }
     }
     private func setRole(_ role: PairRole, for id: String) {
-        let before=devices
-        defer { rememberCountEdits(before) }
         guard let index=devices.firstIndex(where: { $0.id == id }) else { return }
         if role != .both && devices[index].player <= 0 { devices[index].player = readiness?.routes[id]?.player ?? 1 }
         let p=devices[index].player, old=devices[index].role
@@ -383,37 +361,8 @@ struct ControllerSetupView: View {
         devices[index].role=role
     }
 
-    private func rememberCountEdits(_ previous: [Device]) {
-        guard playerCountBaseline != nil else { return }
-        let old=Dictionary(uniqueKeysWithValues: previous.map { ($0.id,$0) })
-        for d in devices where old[d.id] != d { playerCountBaseline?[d.id]=d }
-    }
-    private func choosePlayerCount(_ wanted: Int) {
-        if wanted<0 {
-            devices=devices.map { playerCountBaseline?[$0.id] ?? $0 }
-            playerCountBaseline=nil; playerCountTarget = -1
-        } else {
-            guard playerCountOptions.contains(wanted) else { return }
-            if playerCountBaseline==nil { playerCountBaseline=Dictionary(uniqueKeysWithValues: devices.map { ($0.id,$0) }) }
-            let base=devices.map { playerCountBaseline?[$0.id] ?? $0 }
-            let choices=dm_ios_controller_choices_for_count(base.map(\.choice),Int32(wanted))
-            let rows=Dictionary(uniqueKeysWithValues: choices.compactMap { c -> (String,[String:Any])? in
-                guard let id=c["id"] as? String else { return nil }; return (id,c)
-            })
-            devices=devices.map { d in
-                guard let row=rows[d.id] else { return d }; var next=d
-                next.player=row["player"] as? Int ?? d.player
-                next.style=Style(rawValue:row["style"] as? String ?? "") ?? d.style
-                next.role=PairRole(rawValue:row["role"] as? String ?? "both") ?? .both
-                return next
-            }
-            playerCountTarget=wanted
-        }
-        recommendationSeen.removeAll(); updateReadiness()
-    }
-
     private func save(_ choices: [[String: Any]]) {
-        let message = inGame ? dm_ios_controller_apply_count(choices,Int32(playerCountTarget)) : dm_ios_controller_configure(choices)
+        let message = inGame ? dm_ios_controller_apply(choices) : dm_ios_controller_configure(choices)
         if let message {
             error = message
             refresh()

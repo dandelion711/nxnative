@@ -36,9 +36,6 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
 @property(copy) NSArray *(^resolveChoices)(NSArray *);
 @property(copy) NSString *(^applyChoices)(NSArray *, int, int);
 @property int minimum, maximum;
-@property int playerCountTarget;
-@property NSPopUpButton *playerCountPicker;
-@property NSMutableDictionary *playerCountBaseline;
 @property BOOL recommend;
 @property uint32_t recommendationStyles;
 @property NSMutableSet *recommendationSeen, *signaled;
@@ -92,7 +89,7 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
     if (!(self = [super initWithWindow:window])) return nil;
     window.title = @"Controllers"; window.delegate = self; window.releasedWhenClosed = NO;
     self.recommendationSeen = [NSMutableSet new]; self.signaled = [NSMutableSet new];
-    self.drafts = [NSMutableDictionary new]; self.minimum = 0; self.maximum = 8; self.playerCountTarget=-1;
+    self.drafts = [NSMutableDictionary new]; self.minimum = 0; self.maximum = 8;
     NSView *root = window.contentView;
     NSTextField *title = [self label:@"Controllers" size:24 weight:NSFontWeightBold];
     NSTextField *subtitle = [self label:@"Choose how the game sees each controller." size:13 weight:NSFontWeightRegular];
@@ -102,15 +99,7 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
     requirementsTitle.textColor = NSColor.secondaryLabelColor;
     self.requirementHeading = [self label:@"" size:17 weight:NSFontWeightSemibold];
     self.requirementDetails = [self label:@"" size:13 weight:NSFontWeightRegular];
-    self.playerCountPicker=[NSPopUpButton new]; self.playerCountPicker.identifier=@"player-count";
-    self.playerCountPicker.target=self; self.playerCountPicker.action=@selector(playerCountChanged:);
-    NSStackView *countField=[self column:@[[self label:@"Number of players" size:11 weight:NSFontWeightMedium],self.playerCountPicker] spacing:5];
-    [countField.widthAnchor constraintEqualToConstant:150].active=YES;
-    NSStackView *requirementText=[self column:@[requirementsTitle,self.requirementHeading,self.requirementDetails] spacing:8];
-    NSStackView *requirementRow=[NSStackView stackViewWithViews:@[requirementText,countField]];
-    requirementRow.spacing=18; requirementRow.alignment=NSLayoutAttributeTop;
-    [requirementText.widthAnchor constraintEqualToAnchor:requirementRow.widthAnchor constant:-168].active=YES;
-    NSBox *requirements = [self card:requirementRow];
+    NSBox *requirements = [self card:[self column:@[requirementsTitle, self.requirementHeading, self.requirementDetails] spacing:8]];
     NSTextField *devicesTitle = [self label:@"Connected controllers" size:13 weight:NSFontWeightSemibold];
     NSScrollView *scroll = [NSScrollView new]; scroll.hasVerticalScroller = YES; scroll.drawsBackground = NO;
     self.fields = [DmControllerFields new]; self.fields.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -174,14 +163,7 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
     dm_controller_requirements game = self.displayedRequirements;
     BOOL keyboard = NO;
     int count = controller_ready_players(game, self.resolved, &keyboard);
-    int upper=MIN(self.maximum,controller_player_capacity(game)), lower=MAX(1,self.minimum);
-    if (self.playerCountTarget>=0 && (self.playerCountTarget<lower || self.playerCountTarget>upper)) self.playerCountTarget=-1;
-    [self.playerCountPicker removeAllItems]; [self.playerCountPicker addItemWithTitle:@"Automatic"]; self.playerCountPicker.lastItem.tag=-1;
-    for (int n=lower;n<=upper;n++) { [self.playerCountPicker addItemWithTitle:[NSString stringWithFormat:@"%d player%@",n,n==1 ? @"" : @"s"]]; self.playerCountPicker.lastItem.tag=n; }
-    [self.playerCountPicker selectItemWithTag:self.playerCountTarget]; self.playerCountPicker.enabled=upper>=lower;
-    int requiredMin=self.playerCountTarget>=0 ? self.playerCountTarget : self.minimum;
-    int requiredMax=self.playerCountTarget>=0 ? self.playerCountTarget : self.maximum;
-    self.applyButton.enabled = count >= requiredMin && count <= requiredMax && !cs_pair_error(self.choices);
+    self.applyButton.enabled = count >= self.minimum && count <= self.maximum && !cs_pair_error(self.choices);
     NSMutableArray *details = [NSMutableArray new];
     if (self.minimum > self.maximum) {
         [details addObject:@"The game requested conflicting player counts."];
@@ -205,18 +187,17 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
     for (int p = 1; p <= DM_PLAYERS; p++) if (controller_player_supported(game, p)) [slots addObject:@(p).stringValue];
     if (slots.count < DM_PLAYERS)
         [details addObject:slots.count ? [NSString stringWithFormat:@"Player slots          %@", [slots componentsJoinedByString:@", "]] : @"No external player slots available"];
-    if (self.minimum==self.maximum && self.minimum>1) [details addObject:@"Change the number of players in the game to use fewer."];
     NSMutableParagraphStyle *paragraph = [NSMutableParagraphStyle new]; paragraph.lineSpacing = 7;
     self.requirementDetails.attributedStringValue = [[NSAttributedString alloc] initWithString:[details componentsJoinedByString:@"\n"]
         attributes:@{NSFontAttributeName: [NSFont systemFontOfSize:13], NSForegroundColorAttributeName: NSColor.labelColor, NSParagraphStyleAttributeName: paragraph}];
 
     NSString *status, *detail;
     if (self.minimum > self.maximum) { status = @"Setup unavailable"; detail = @"Cancel this setup and try again."; }
-    else if (count < requiredMin) {
-        status = [NSString stringWithFormat:@"%d of %d players ready", count, requiredMin];
+    else if (count < self.minimum) {
+        status = [NSString stringWithFormat:@"%d of %d players ready", count, self.minimum];
         detail = @"Assign the required players to continue.";
-    } else if (count > requiredMax) {
-        int extra = count - requiredMax;
+    } else if (count > self.maximum) {
+        int extra = count - self.maximum;
         status = [NSString stringWithFormat:@"%d players ready · Too many", count];
         detail = [NSString stringWithFormat:@"Unassign %d controller%@ to continue.", extra, extra == 1 ? @"" : @"s"];
     } else { status = [NSString stringWithFormat:@"%d player%@ ready", count, count == 1 ? @"" : @"s"]; detail = @"Changes apply to this session."; }
@@ -367,21 +348,7 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
     self.operationError.stringValue = @"This controller couldn’t be signaled.";
     self.operationError.hidden = NO;
 }
-- (void)playerCountChanged:(NSPopUpButton *)sender {
-    int wanted=(int)sender.selectedTag;
-    if (wanted<0) {
-        for (NSString *key in self.drafts.allKeys) if (self.playerCountBaseline[key]) self.drafts[key]=self.playerCountBaseline[key];
-        self.playerCountBaseline=nil; self.playerCountTarget=-1; [self refresh]; return;
-    }
-    if (!self.playerCountBaseline) self.playerCountBaseline=[self.drafts mutableCopy];
-    for (NSString *key in self.drafts.allKeys) if (self.playerCountBaseline[key]) self.drafts[key]=self.playerCountBaseline[key];
-    self.playerCountTarget=wanted;
-    BOOL fallback=NO; int ready=controller_ready_players(self.displayedRequirements,self.resolved,&fallback);
-    if (ready!=wanted) for (NSDictionary *choice in controller_choices_for_count(self.choices,self.resolved,wanted,self.displayedRequirements.ids)) self.drafts[choice[@"id"]]=choice;
-    [self.recommendationSeen removeAllObjects]; [self refresh];
-}
 - (void)choiceChanged:(DmControllerPopup *)sender {
-    NSDictionary *before=[self.drafts copy];
     NSString *key = sender.deviceID; NSMutableDictionary *choice = [self.drafts[key] mutableCopy]; if (!choice) return;
     if (sender.roleChoice) {
         NSString *role=sender.selectedItem.representedObject;
@@ -410,6 +377,20 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
     }
     else {
         NSInteger player = sender.selectedTag;
+        NSMutableArray *occupants=[NSMutableArray new];
+        for (NSDictionary *route in self.resolved) if (![route[@"id"] isEqual:key] && [route[@"player"] integerValue]==player && player>0) [occupants addObject:route[@"id"]];
+        if (occupants.count==1) {
+            NSString *other=occupants[0]; NSMutableDictionary *peer=[self.drafts[other] mutableCopy];
+            NSString *ownSide=nil,*peerSide=nil;
+            for (NSDictionary *device in self.rows) { if ([device[@"id"] isEqual:key]) ownSide=device[@"physicalSide"]; if ([device[@"id"] isEqual:other]) peerSide=device[@"physicalSide"]; }
+            NSString *leftRight=peerSide ?: (ownSide ? ([ownSide isEqual:@"left"] ? @"right" : @"left") : (cs_role(peer) ? peer[@"role"] : @"left"));
+            NSString *opposite=[leftRight isEqual:@"left"] ? @"right" : @"left";
+            if (!ownSide || [ownSide isEqual:opposite]) {
+                peer[@"player"]=@(player); peer[@"style"]=@"pair"; peer[@"role"]=leftRight;
+                choice[@"player"]=@(player); choice[@"style"]=@"pair"; choice[@"role"]=opposite;
+                self.drafts[other]=peer; self.drafts[key]=choice; [self refresh]; return;
+            }
+        }
         if (player > 0) for (NSString *other in self.drafts.allKeys) if (![other isEqual:key] && [self.drafts[other][@"player"] integerValue] == player && !cs_can_share(choice,self.drafts[other])) {
             NSMutableDictionary *displaced = [self.drafts[other] mutableCopy];
             NSUInteger occupants=0; for (NSDictionary *c in self.drafts.allValues) if ([c[@"player"] integerValue]==player) occupants++;
@@ -420,12 +401,11 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
         choice[@"player"] = @(player); if (player<=0) choice[@"role"]=@"both";
     }
     self.drafts[key] = choice;
-    if (self.playerCountBaseline) for (NSString *device in self.drafts) if (![before[device] isEqual:self.drafts[device]]) self.playerCountBaseline[device]=self.drafts[device];
     [self refresh];
 }
 - (void)apply:(id)sender {
     (void)sender;
-    NSString *error = self.applyChoices ? self.applyChoices(self.choices, self.playerCountTarget>=0 ? self.playerCountTarget : self.minimum, self.playerCountTarget>=0 ? self.playerCountTarget : self.maximum) : @"Controller setup is unavailable.";
+    NSString *error = self.applyChoices ? self.applyChoices(self.choices, self.minimum, self.maximum) : @"Controller setup is unavailable.";
     if (error) { [self refresh]; self.operationError.stringValue = error; self.operationError.hidden = NO; return; }
     [self.window.sheetParent endSheet:self.window returnCode:NSModalResponseOK];
 }

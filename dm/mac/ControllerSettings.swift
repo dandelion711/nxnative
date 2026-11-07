@@ -98,8 +98,20 @@ final class ControllerSettingsModel: ObservableObject {
     func choosePlayer(_ player: Int?, for id: LauncherController.ID) {
         guard var choice = choices[id] else { return }
         if let player, player != -1 && !(1...8).contains(player) { return }
-        // Keep ordinary single-controller swaps. A pair can retain only its
-        // complementary member, so an extra source returns to Automatic.
+        if let player, player>0 {
+            let occupants=controllers.filter { $0.id != id && resolvedPlayer(for:$0.id)==player }
+            if occupants.count==1, let other=occupants.first, var peer=choices[other.id] {
+                let ownSide=controllers.first { $0.id==id }?.physicalSide.flatMap(ControllerPairRole.init(rawValue:))
+                let peerSide=other.physicalSide.flatMap(ControllerPairRole.init(rawValue:))
+                let side=peerSide ?? ownSide.map { $0 == .left ? .right : .left } ?? (peer.role == .both ? .left : peer.role)
+                let opposite: ControllerPairRole = side == .left ? .right : .left
+                if ownSide == nil || ownSide == opposite {
+                    peer.player=player; peer.style = .pair; peer.role=side
+                    choice.player=player; choice.style = .pair; choice.role=opposite
+                    choices[other.id]=peer; choices[id]=choice; return
+                }
+            }
+        }
         if let player, player > 0 {
             let others = choices.filter { $0.key != id && $0.value.player == player }
             for (key, target) in others {

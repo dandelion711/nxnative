@@ -102,11 +102,12 @@ int main(int argc, char **argv) { @autoreleasepool {
     assert([signaled isEqual:@"b"] && applied == 0);
     assert([identify.title isEqual:@"Identify • signal sent"]);
     selectPlayer(ui.panel, @"a", 2);
-    assert([ui.panel.drafts[@"a"][@"player"] intValue] == 2 && [ui.panel.drafts[@"b"][@"player"] intValue] == 1);
-    selectStyle(ui.panel, @"a", 1); selectStyle(ui.panel, @"b", 1);
-    DmControllerPopup *role=popup(ui.panel.window.contentView,@"role.a"); assert(role);
+    assert([ui.panel.drafts[@"a"][@"player"] intValue]==2 && [ui.panel.drafts[@"b"][@"player"] intValue]==2);
+    assert(cs_role(ui.panel.drafts[@"b"])==1 && cs_role(ui.panel.drafts[@"a"])==2 && ui.panel.applyButton.enabled);
+    assert([ui.panel.drafts[@"a"][@"style"] isEqual:@"pair"] && [ui.panel.drafts[@"b"][@"style"] isEqual:@"pair"]);
+    DmControllerPopup *role=popup(ui.panel.window.contentView,@"role.a");
     [role selectItemAtIndex:1]; [role sendAction:role.action to:role.target];
-    assert(!ui.panel.applyButton.enabled);
+    assert(ui.panel.applyButton.enabled); // manual side swap retains a complete pair
     role=popup(ui.panel.window.contentView,@"role.b"); assert(role);
     [role selectItemAtIndex:2]; [role sendAction:role.action to:role.target];
     selectPlayer(ui.panel,@"b",2);
@@ -191,33 +192,16 @@ int main(int argc, char **argv) { @autoreleasepool {
     assert(ui.panel.applyButton.enabled && [ui.panel.drafts[@"physical-l"][@"player"] intValue]==1 && [ui.panel.drafts[@"physical-r"][@"player"] intValue]==1);
     DmControllerPopup *leftRole=popup(ui.panel.window.contentView,@"role.physical-l");
     assert(leftRole.numberOfItems==1 && [leftRole.selectedItem.representedObject isEqual:@"left"]);
-    devices=[devices arrayByAddingObject:@{@"id":@"pair-extra",@"name":@"DualSense"}];
-    active=[active arrayByAddingObject:@{@"id":@"pair-extra",@"player":@2,@"style":@"pro"}];
-    ui.panel.maximum=4; [ui.panel refresh];
-    [ui.panel.playerCountPicker selectItemWithTag:1]; [ui.panel.playerCountPicker sendAction:ui.panel.playerCountPicker.action to:ui.panel.playerCountPicker.target];
-    assert(cs_role(ui.panel.drafts[@"physical-l"])==1 && cs_role(ui.panel.drafts[@"physical-r"])==2 && [ui.panel.drafts[@"physical-r"][@"player"] intValue]==1);
-    assert([ui.panel.drafts[@"pair-extra"][@"player"] intValue]==0 && [active.lastObject[@"player"] intValue]==2);
     [ui.panel cancel:nil]; settle(^BOOL { return ui.panel==nil; });
 
-    devices=@[@{@"id":@"count-a",@"name":@"DualSense"},@{@"id":@"count-b",@"name":@"DualSense"}];
-    active=@[@{@"id":@"count-a",@"player":@(-1),@"style":@"auto"},@{@"id":@"count-b",@"player":@(-1),@"style":@"auto"}];
-    game=(dm_controller_requirements){DM_STYLE_PRO,3,NO};
-    [ui openMinimum:1 maximum:4 completion:nil];
-    assert(ui.panel.playerCountTarget==-1 && [ui.panel.playerCountPicker.menu itemWithTag:1] && [ui.panel.playerCountPicker.menu itemWithTag:2] && ![ui.panel.playerCountPicker.menu itemWithTag:3]);
-    [ui.panel.playerCountPicker selectItemWithTag:1]; [ui.panel.playerCountPicker sendAction:ui.panel.playerCountPicker.action to:ui.panel.playerCountPicker.target];
-    assert(ui.panel.playerCountTarget==1 && [ui.panel.drafts[@"count-b"][@"player"] intValue]==0 && ui.panel.applyButton.enabled);
-    assert([active[1][@"player"] intValue]==-1); // choosing a count is only a draft until Apply
-    [ui.panel.window.contentView layoutSubtreeIfNeeded];
-    NSRect countFrame=[ui.panel.playerCountPicker convertRect:ui.panel.playerCountPicker.bounds toView:ui.panel.window.contentView];
-    assert(NSMinX(countFrame)>NSWidth(ui.panel.window.contentView.bounds)/2 && NSWidth(ui.panel.requirementDetails.frame)>300);
-    if (argc>1) capture(ui.panel.window,[@(argv[1]) stringByAppendingPathComponent:@"player-count-selected.png"]);
-    [ui.panel.playerCountPicker selectItemWithTag:-1]; [ui.panel.playerCountPicker sendAction:ui.panel.playerCountPicker.action to:ui.panel.playerCountPicker.target];
-    assert([ui.panel.drafts[@"count-a"][@"player"] intValue]==-1 && [ui.panel.drafts[@"count-b"][@"player"] intValue]==-1);
-    ui.panel.minimum=ui.panel.maximum=2; [ui.panel refresh];
-    assert(![ui.panel.playerCountPicker.menu itemWithTag:1] && [ui.panel.requirementDetails.stringValue containsString:@"in the game to use fewer"]);
-    if (argc>1) capture(ui.panel.window,[@(argv[1]) stringByAppendingPathComponent:@"player-count-fixed.png"]);
-    game.ids=1; [ui refresh]; assert(!ui.panel.playerCountPicker.enabled && !ui.panel.applyButton.enabled);
+    devices=@[@{@"id":@"auto-a",@"name":@"DualSense"},@{@"id":@"auto-b",@"name":@"DualSense"}];
+    active=@[@{@"id":@"auto-a",@"player":@(-1),@"style":@"auto"},@{@"id":@"auto-b",@"player":@(-1),@"style":@"auto"}];
+    game=(dm_controller_requirements){0x1f,0xff,NO};
+    [ui openMinimum:1 maximum:8 completion:nil];
+    selectPlayer(ui.panel,@"auto-b",1);
+    assert(cs_role(ui.panel.drafts[@"auto-a"])==1 && cs_role(ui.panel.drafts[@"auto-b"])==2 && ui.panel.applyButton.enabled);
     [ui.panel cancel:nil]; settle(^BOOL { return ui.panel==nil; });
+    assert([active[0][@"player"] intValue]==-1 && [active[1][@"style"] isEqual:@"auto"]);
 
     atomic_store(&finished, 0);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ answer = [ui requestMinimum:1 maximum:8]; atomic_store(&finished, 1); });

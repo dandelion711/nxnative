@@ -34,10 +34,10 @@ import Darwin
         expect(model.choices[a.id] == ControllerChoice(player: -1, style: .left), "discovery reorder preserves identity and choices")
         model.choosePlayer(2, for: a.id)
         expect(model.automaticPlayerLabel(for: a.id) == "Automatic" && model.playerSlots(for: a.id) == Array(1...8), "manual assignment keeps every fixed player and an unambiguous return to Automatic")
-        expect(model.choices[a.id]?.player == 2 && model.resolvedPlayer(for: b.id) == 1, "moving to an occupied player swaps the drafts")
+        expect(model.choices[a.id]?.player == 2 && model.resolvedPlayer(for: b.id) == 1, "fixing the already resolved slot does not group another player")
         model.choosePlayer(nil, for: b.id)
         model.choosePlayer(2, for: b.id)
-        expect(model.choices[b.id]?.player == 2 && model.choices[a.id]?.player == nil, "moving an unassigned device displaces the occupied device to unassigned")
+        expect(model.choices[b.id]?.player == 2 && model.choices[a.id]?.player == 2 && model.pairingIssue == nil, "an unassigned device joins the occupied player as a pair")
         model.choosePlayer(9, for: b.id)
         expect(model.choices[b.id]?.player == 2, "invalid player slots are ignored")
         model.update([b])
@@ -47,6 +47,15 @@ import Darwin
         expect(ControllerSettingsModel().choices.isEmpty, "a new session starts without saved choices")
         expect(ProcessInfo.processInfo.environment == beforeEnv, "drafts do not change the host environment")
         expect(beforePrefs.isEqual(to: UserDefaults.standard.dictionaryRepresentation()), "drafts do not write preferences")
+
+        let automaticPair = ControllerSettingsModel(); automaticPair.update([a,b])
+        automaticPair.choosePlayer(1,for:b.id)
+        expect(automaticPair.choices[a.id]?.player == 1 && automaticPair.choices[b.id]?.player == 1 && automaticPair.choices[a.id]?.role == .left && automaticPair.choices[b.id]?.role == .right && automaticPair.pairingIssue == nil, "joining an Automatic occupant forms a complete pair")
+
+        let sameSide = ControllerSettingsModel()
+        sameSide.update([LauncherController(id:"left-a",name:"Joy-Con L",physicalSide:"left"),LauncherController(id:"left-b",name:"Joy-Con L",physicalSide:"left")])
+        sameSide.choosePlayer(1,for:"left-b")
+        expect(sameSide.choices["left-a"]?.style != .pair && sameSide.choices["left-b"]?.style != .pair, "two physical left halves never form an invented left/right pair")
 
         let pair = ControllerSettingsModel(); pair.update([a,b])
         pair.chooseStyle(.pair,for:a.id); pair.chooseStyle(.pair,for:b.id)
