@@ -132,6 +132,15 @@ static int controller_support(int minimum, int maximum) {
     dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
     return applied ? 1 : 0;
 }
+// UIAction dismisses the gear menu. Present on the next main-queue turn and
+// reuse the applet sheet, including its pending-request limits and input gate.
+void dm_ios_controller_open(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        int minimum=0, maximum=DM_PLAYERS;
+        dm_controller_setup_requirements(NULL,NULL,&minimum,&maximum);
+        [g_root openControllerSetup:minimum maximum:maximum completion:nil];
+    });
+}
 static void launcher_done(void) { [g_root startGame]; }
 @implementation DmRootVC
 - (void)loadView { self.view = [DmRootView new]; }
