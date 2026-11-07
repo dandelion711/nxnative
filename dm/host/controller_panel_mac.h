@@ -299,8 +299,7 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
         if (assigned && effective[@"pairComplete"] && ![effective[@"pairComplete"] boolValue]) warning = @"Assign both sides to complete this player’s pair.";
         else if (assigned && !slotSupported) warning = @"Choose a player slot listed in the game requirements.";
         else if (assigned && !(game.styles & cs_style(effective[@"style"]))) warning = @"Change “Game sees” to a type listed above.";
-        if (warning) name.stringValue = [name.stringValue stringByAppendingString:@" • Not ready"];
-        NSTextField *badge = [self label:assigned && !warning ? @"✓ Ready" : !assigned ? @"Unassigned" : @"" size:11 weight:NSFontWeightMedium];
+        NSTextField *badge = [self label:warning ? @"✕ Not ready" : assigned ? @"✓ Ready" : @"Unassigned" size:11 weight:NSFontWeightMedium];
         badge.textColor = NSColor.secondaryLabelColor;
         [badge setContentCompressionResistancePriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
         NSView *space = [NSView new]; [space setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
