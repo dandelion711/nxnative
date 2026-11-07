@@ -47,6 +47,8 @@ On the Mac (headless, docked): from a fresh save the opening movie with sound, t
 
 General changes first needed here; each applies to every game:
 
+- **Compact iOS controller-sheet layout** moves persistent actions to native navigation controls ([mechanism and verification](../../../docs/reference/services.md#compact-ios-controller-sheet-chrome)). On-device visual checks remain pending.
+
 - **Both full gamepads can supply ordinary pair buttons**, while motion and native Joy-Con behavior remain side-specific ([mechanism and validation](../../../docs/reference/services.md#shared-buttons-in-a-two-source-pair)). Physical/controller gameplay checks of this follow-up remain pending.
 
 - **Selecting an occupied player forms a pair** ([mechanism and input investigation](../../../docs/reference/services.md#pair-controllers-by-selecting-the-same-player)). Mac automated coverage and iOS compilation are separate from pending physical/gameplay checks.

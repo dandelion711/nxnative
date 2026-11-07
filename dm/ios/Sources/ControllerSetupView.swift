@@ -151,18 +151,12 @@ struct ControllerSetupView: View {
                     }
                 }
             }
-            .safeAreaInset(edge: .bottom) {
-                if inGame, let readiness { readinessFooter(readiness) }
-            }
+            .modifier(ControllerSetupChrome())
             .navigationTitle("Controllers")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { finish(false) } }
-                ToolbarItem(placement: .confirmationAction) {
-                    if !inGame {
-                        Button("Done") { save(devices.map(\.choice)) }.disabled(devices.isEmpty || pairingIssue)
-                    }
-                }
+                ToolbarItem(placement: .confirmationAction) { confirmationControl }
             }
         }
         .onAppear(perform: refresh)
@@ -183,8 +177,24 @@ struct ControllerSetupView: View {
         }
     }
 
+    private var confirmationDisabled: Bool {
+        pairingIssue || (inGame ? readiness?.canApply != true : devices.isEmpty)
+    }
+
+    private var confirmationLabel: Text { inGame ? Text("Apply") : Text("Done") }
+
+    @ViewBuilder private var confirmationControl: some View {
+        if #available(iOS 26.0, *) {
+            Button(role: .confirm) { save(devices.map(\.choice)) } label: { confirmationLabel }
+                .disabled(confirmationDisabled)
+        } else {
+            Button { save(devices.map(\.choice)) } label: { confirmationLabel }
+                .disabled(confirmationDisabled)
+        }
+    }
+
     private func requirements(_ status: Readiness) -> some View {
-        Section("Game requirements") {
+        Section {
             Text(status.playerCount).font(.headline)
             if status.styles.isEmpty {
                 Text("No external controller types accepted")
@@ -197,6 +207,10 @@ struct ControllerSetupView: View {
             } else if status.players.count < 8 {
                 LabeledContent("Player slots", value: status.players.map(String.init).joined(separator: ", "))
             }
+        } header: {
+            Text("Game requirements")
+        } footer: {
+            readinessSummary(status)
         }
     }
 
@@ -208,37 +222,27 @@ struct ControllerSetupView: View {
         }
     }
 
-    private func readinessFooter(_ status: Readiness) -> some View {
-        HStack(spacing: 16) {
-            VStack(alignment: .leading, spacing: 3) {
-                if status.minimum > status.maximum {
-                    Text("Setup unavailable").font(.headline)
-                    Text("Cancel this setup and try again.").font(.footnote)
-                } else if status.ready < status.minimum {
-                    Text("\(status.ready) of \(status.minimum) players ready").font(.headline)
-                    Text("Assign the required players to continue.").font(.footnote)
+    private func readinessSummary(_ status: Readiness) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if status.minimum > status.maximum {
+                Text("Setup unavailable").font(.headline)
+                Text("Cancel this setup and try again.").font(.footnote)
+            } else if status.ready < status.minimum {
+                Text("\(status.ready) of \(status.minimum) players ready").font(.headline)
+                Text("Assign the required players to continue.").font(.footnote)
+            } else {
+                Text(status.ready == 1 ? "1 player ready" : "\(status.ready) players ready").font(.headline)
+                if status.ready > status.maximum {
+                    Text("Unassign \(status.ready - status.maximum) to continue.").font(.footnote)
                 } else {
-                    Text(status.ready == 1 ? "1 player ready" : "\(status.ready) players ready").font(.headline)
-                    if status.ready > status.maximum {
-                        Text("Unassign \(status.ready - status.maximum) to continue.").font(.footnote)
-                    } else {
-                        Text("Changes apply to this session.").font(.footnote)
-                    }
-                }
-                if status.touch {
-                    Text("Touch controls count as Player 1.").font(.footnote)
+                    Text("Changes apply to this session.").font(.footnote)
                 }
             }
-            .accessibilityElement(children: .combine)
-            Spacer(minLength: 0)
-            Button("Apply") { save(devices.map(\.choice)) }
-                .buttonStyle(.borderedProminent)
-                .disabled(!status.canApply || pairingIssue)
+            if status.touch {
+                Text("Touch controls count as Player 1.").font(.footnote)
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 8)
-        .background(.regularMaterial)
+        .accessibilityElement(children: .combine)
     }
 
     private func updateReadiness() {
@@ -381,5 +385,23 @@ final class DmControllerSetupHost: NSObject {
     @MainActor @objc(makeControllerWithCompletion:)
     static func makeController(completion: @escaping (Bool) -> Void) -> UIViewController {
         DmHostingController(rootView: ControllerSetupView(runtimeCompletion: completion))
+    }
+}
+
+// Native toolbar buttons get Liquid Glass on iOS 26+. Avoid a full-width
+// background in the normal appearance, while retaining a legible scroll edge
+// and the system's solid treatment when contrast or transparency is adjusted.
+private struct ControllerSetupChrome: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .toolbarBackground(reduceTransparency || contrast == .increased ? .visible : .hidden, for: .navigationBar)
+                .scrollEdgeEffectStyle(contrast == .increased ? .hard : .soft, for: .top)
+        } else {
+            content
+        }
     }
 }
