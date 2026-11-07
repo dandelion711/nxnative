@@ -192,7 +192,7 @@ static void pad_read(GCExtendedGamepad *g) {
     #undef K
     if (role) {
         if (m || fabsf(g.leftThumbstick.xAxis.value)>.15f || fabsf(g.leftThumbstick.yAxis.value)>.15f) cursor_hide_for_input();
-        dm_pad_set_side(p,role,m,pad_axis(g.leftThumbstick.xAxis.value),pad_axis(g.leftThumbstick.yAxis.value));
+        (dm_pad_is_joycon(g.controller) ? dm_pad_set_side : dm_pad_set_pair_gamepad)(p,role,m,pad_axis(g.leftThumbstick.xAxis.value),pad_axis(g.leftThumbstick.yAxis.value));
     } else pad_set(p, m, pad_axis(g.leftThumbstick.xAxis.value), pad_axis(g.leftThumbstick.yAxis.value), pad_axis(g.rightThumbstick.xAxis.value), pad_axis(g.rightThumbstick.yAxis.value));
 }
 // Home and Capture: without this macOS takes them as system gestures (Home opens the Games app). Capture has no function in the host, Home quits when it is held (hq_poll).

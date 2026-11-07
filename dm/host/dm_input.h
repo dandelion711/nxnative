@@ -33,6 +33,9 @@ void dm_pad_style(int player, uint32_t style, int follow_hold);
 // A grouped player is connected only with both roles present. Single-pad pair emulation stays shared.
 void dm_pad_pair_sources(int player, int grouped, uint32_t sides);
 void dm_pad_set_side(int player, int role, uint64_t buttons, int32_t lx, int32_t ly);
+// Full-size member of a two-source pair: preserve mapped button meanings across
+// both virtual halves. The primary stick, Shake and motion retain the source role.
+void dm_pad_set_pair_gamepad(int player, int role, uint64_t buttons, int32_t lx, int32_t ly);
 void dm_motion_set_side_generation(int player, int role, uint64_t generation, const float acc[3], const float rot[3]);
 void dm_motion_clear_side(int player, int role);
 void dm_pad_explicit(int enabled);   // explicit player slots never merge into player 1

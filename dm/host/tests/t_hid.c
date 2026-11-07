@@ -730,6 +730,40 @@ static void t_two_source_pair(void) {
     dm_pad_style(0,DM_STYLE_AUTO,0); dm_pad_explicit(0); dm_pad_players(1); h_hid_SetStyles(0xffffffffu);
 }
 
+static void t_pair_full_gamepad_buttons(void) {
+    g_mode=1; ids((uint32_t[]){0,1},2); h_hid_SetStyles(0x1f);
+    dm_pad_explicit(1); dm_pad_style(0,DM_STYLE_PAIR,0); dm_pad_pair_sources(0,1,3); dm_pad_players(1);
+    NpadState state;
+    for (int role=1;role<=2;role++) for (int bit=0;bit<16;bit++) {
+        dm_input_quiesce(); dm_pad_set_pair_gamepad(0,role,1u<<bit,0,0); fill(&state,0,STYLE_JOYDUAL);
+        CHECK((state.buttons&0xffffu)==(1u<<bit),"either full gamepad preserves face, D-pad, shoulder, trigger, menu and stick-click meanings");
+    }
+    dm_input_quiesce(); dm_pad_set_pair_gamepad(0,1,DM_BTN_L|DM_BTN_R,10,20); fill(&state,0,STYLE_JOYDUAL);
+    CHECK((state.buttons&(DM_BTN_L|DM_BTN_R))==(DM_BTN_L|DM_BTN_R),"one full gamepad can satisfy an L+R prompt");
+    dm_pad_set_pair_gamepad(0,2,DM_BTN_B,30,40); dm_pad_set_pair_gamepad(0,1,DM_BTN_B,10,20); fill(&state,0,STYLE_JOYDUAL);
+    CHECK((state.buttons&(DM_BTN_B|DM_BTN_DOWN))==DM_BTN_B,"B does not also move the menu down");
+    dm_pad_set_pair_gamepad(0,1,0,0,0); fill(&state,0,STYLE_JOYDUAL);
+    CHECK((state.buttons&DM_BTN_B) && state.rx==30 && state.ry==40,"releasing one gamepad preserves the other source's button and stick");
+    dm_pad_set_pair_gamepad(0,2,0,0,0); fill(&state,0,STYLE_JOYDUAL); fill(&state,0,STYLE_JOYDUAL);
+    CHECK(!(state.buttons&DM_BTN_B),"the last source's release clears the shared button");
+    dm_input_quiesce(); dm_pad_set_side(0,1,DM_BTN_L|DM_BTN_LEFT,12,13); dm_pad_set_pair_gamepad(0,2,DM_BTN_R|DM_BTN_A,14,15); fill(&state,0,STYLE_JOYDUAL);
+    CHECK((state.buttons&(DM_BTN_L|DM_BTN_LEFT|DM_BTN_R|DM_BTN_A))==(DM_BTN_L|DM_BTN_LEFT|DM_BTN_R|DM_BTN_A),"a native half and a full gamepad compose without cross-aliases");
+    dm_pad_set_pair_gamepad(0,2,0,0,0); fill(&state,0,STYLE_JOYDUAL); fill(&state,0,STYLE_JOYDUAL);
+    CHECK((state.buttons&(DM_BTN_L|DM_BTN_LEFT))==(DM_BTN_L|DM_BTN_LEFT) && !(state.buttons&(DM_BTN_A|DM_BTN_R)),"full gamepad release leaves the native half untouched");
+    uint32_t handles[2]; h_hid_SixHandles(handles,2,&(uint32_t){0},STYLE_JOYDUAL);
+    uint64_t gen=dm_pad_generation(0); motion_now+=10000000; pair_guest_time=motion_now;
+    dm_motion_set_side_generation(0,1,gen,(float[]){0,0,-1},(float[]){1,0,0});
+    dm_motion_set_side_generation(0,2,gen,(float[]){0,0,-1},(float[]){0,2,0});
+    dm_input_quiesce(); dm_pad_set_pair_gamepad(0,1,DM_BTN_SHAKE|DM_BTN_R,0,0); motion_now+=20000000; pair_guest_time=motion_now;
+    SixAxisState left,right; h_hid_SixStates(&left,1,&handles[0]); h_hid_SixStates(&right,1,&handles[1]);
+    CHECK(left.gyro[0]>.1f && right.gyro[1]>.2f && fabsf(left.acc[0])>.1f && right.acc[0]==0,"cross-half R leaves motion and synthetic Shake assigned to the physical source role");
+    dm_pad_reconfigure_begin(); dm_pad_reconfigure_reset(1); dm_pad_pair_sources(0,1,1); dm_pad_reconfigure_end();
+    CHECK(!style_of(0),"a missing pair member still disconnects the logical player");
+    dm_pad_pair_sources(0,1,3); fill(&state,0,STYLE_JOYDUAL);
+    CHECK(!(state.buttons&0xffffu),"source reset clears held cross-half buttons before reconnection");
+    dm_pad_pair_sources(0,0,0); dm_pad_style(0,DM_STYLE_AUTO,0); dm_pad_explicit(0); dm_input_quiesce();
+}
+
 static int support_low, support_high; static uint32_t support_styles;
 static int support_options_hook(int minimum,int maximum) {
     support_low=minimum; support_high=maximum;
@@ -781,6 +815,7 @@ int main(void) {
     t_ios_touch_fallback();
     t_ios_automatic_compatibility();
     t_two_source_pair();
+    t_pair_full_gamepad_buttons();
     t_support_options();
     printf("hid players: %d checks, %d failed\n", checks, fails);
     return fails != 0;

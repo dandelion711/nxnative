@@ -375,6 +375,18 @@ void dm_pad_pair_sources(int p, int grouped, uint32_t sides) { HID_GUARD;
     int was = atomic_exchange(&g_pair_grouped[p], !!grouped);
     if (old != (sides & 3u) || was != !!grouped) style_changed(dm_player_npad(p));
 }
+// Callers hold HID_GUARD. Keep separate held state so one source's release
+// cannot cancel another source's button, including mixed native/full-size pairs.
+static void pair_publish(int p,int role,uint64_t buttons,int32_t lx,int32_t ly) {
+    pair_shake_note(p,role-1,buttons);
+    g_side_buttons[p][role-1] = buttons;
+    g_side_axes[p][role-1][0] = lx; g_side_axes[p][role-1][1] = ly;
+    dm_pad_set_player(p,g_side_buttons[p][0]|g_side_buttons[p][1],g_side_axes[p][0][0],g_side_axes[p][0][1],g_side_axes[p][1][0],g_side_axes[p][1][1]);
+}
+void dm_pad_set_pair_gamepad(int p,int role,uint64_t buttons,int32_t lx,int32_t ly) { HID_GUARD;
+    if (p<0 || p>=DM_PLAYERS || role<1 || role>2) return;
+    pair_publish(p,role,buttons,lx,ly);
+}
 void dm_pad_set_side(int p, int role, uint64_t b, int32_t lx, int32_t ly) { HID_GUARD;
     if (p < 0 || p >= DM_PLAYERS || role < 1 || role > 2) return;
     uint64_t out;
@@ -388,10 +400,7 @@ void dm_pad_set_side(int p, int role, uint64_t b, int32_t lx, int32_t ly) { HID_
         if (b & DM_BTN_LS) out |= DM_BTN_RS;
         if (b & DM_BTN_MINUS) out |= DM_BTN_PLUS;
     }
-    pair_shake_note(p,role-1,out);
-    g_side_buttons[p][role-1] = out;
-    g_side_axes[p][role-1][0] = lx; g_side_axes[p][role-1][1] = ly;
-    dm_pad_set_player(p,g_side_buttons[p][0]|g_side_buttons[p][1],g_side_axes[p][0][0],g_side_axes[p][0][1],g_side_axes[p][1][0],g_side_axes[p][1][1]);
+    pair_publish(p,role,out,lx,ly);
 }
 void dm_pad_explicit(int enabled) { HID_GUARD; atomic_store(&g_explicit_players, !!enabled); }
 static void note_merged(void) {   // logs the players whose npad the game does not support, when that changes

@@ -615,7 +615,7 @@ static void read_pad(GCExtendedGamepad *g) {
     if (g.leftThumbstickButton) K(g.leftThumbstickButton, B_LS); if (g.rightThumbstickButton) K(g.rightThumbstickButton, B_RS);
     K(g.dpad.left, B_LEFT); K(g.dpad.up, B_UP); K(g.dpad.right, B_RIGHT); K(g.dpad.down, B_DOWN);
     #undef K
-    if (role) dm_pad_set_side(p,role,m,axis(g.leftThumbstick.xAxis.value),axis(g.leftThumbstick.yAxis.value));
+    if (role) (dm_pad_is_joycon(controller) ? dm_pad_set_side : dm_pad_set_pair_gamepad)(p,role,m,axis(g.leftThumbstick.xAxis.value),axis(g.leftThumbstick.yAxis.value));
     else dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
 }
 // Home and Capture: without this iOS takes them as system gestures (Home opens the Games overlay, Capture a screenshot); the app gives them no function
