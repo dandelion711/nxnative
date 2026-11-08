@@ -620,6 +620,7 @@ static void read_pad(GCExtendedGamepad *g) {
     if (p<0 && m && cs_waits_for_press(controller,g_overrides[key])) {
         cs_admit(controller); [g_view padsChanged:nil];
         p=pad_slot_of(&g_routes.slots,(__bridge const void *)controller);
+        if (p<0 && key) [cs_admitted removeObject:key];
     }
     if ([g_join poll] || atomic_load(&g_configuring) || p<0) return;
     if (!role) dm_haptics_apple_controller(p,controller);
