@@ -39,12 +39,6 @@ static inline dm_controller_evaluation controller_choices_evaluate(dm_controller
     }
     return dm_controller_evaluate(routes,(dm_controller_limits){game.styles,game.ids,0,DM_PLAYERS});
 }
-static inline int controller_ready_players(dm_controller_requirements game, NSArray *choices, BOOL *fallbackCounts) {
-    dm_controller_evaluation evaluation=controller_choices_evaluate(game,choices);
-    if (fallbackCounts) *fallbackCounts=evaluation.fallback!=0;
-    return evaluation.ready_count;
-}
-
 // A recommendation only changes the draft. Prefer full controllers when
 // accepted, otherwise alternate the accepted single Joy-Con sides by player.
 static inline NSString *controller_recommended_style(uint32_t supported, int player) {

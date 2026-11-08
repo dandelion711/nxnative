@@ -10,10 +10,6 @@ typedef struct {
     uint32_t sides[DM_PLAYERS];
 } dm_ios_routes;
 
-static uint32_t ios_style(NSString *name) {
-    return [name isEqual:@"auto"] ? DM_STYLE_AUTO : cs_style(name);
-}
-
 static NSString *ios_validate_overrides(NSArray *choices, NSDictionary **accepted) {
     NSDictionary *validated=nil;
     NSString *error=cs_validate_choices(choices,&validated); if (error) return error;
@@ -32,7 +28,7 @@ static void ios_route(dm_ios_routes *plan, NSArray<NSMutableArray<GCController *
         pad_slot_assign(&plan->slots, (__bridge const void *)controller, name.UTF8String ?: "", slot);
     [sources[slot] addObject:controller];
     if (choice) {
-        plan->styles[slot] = ios_style(choice[@"style"]);
+        plan->styles[slot] = cs_style(choice[@"style"]);
         plan->manual |= 1u << slot;
         int role=cs_role(choice); if (role) plan->sides[slot] |= 1u << (role-1);
     }

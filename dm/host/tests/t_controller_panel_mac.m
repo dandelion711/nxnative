@@ -58,7 +58,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     __block dm_controller_requirements game = {0x1f, 0xff, NO};
     ui.requirements = ^{ return game; };
     ui.applyChoices = ^NSString *(NSArray *choices, int minimum, int maximum) {
-        int count = controller_ready_players(game, choices, NULL);
+        int count = controller_choices_evaluate(game, choices).ready_count;
         if (reject || count < minimum || count > maximum) return @"Connect and assign the controllers this game requires.";
         active = [choices copy]; applied++; return nil;
     };

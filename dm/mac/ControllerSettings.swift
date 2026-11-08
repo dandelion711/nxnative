@@ -34,7 +34,7 @@ enum ControllerPairRole: String, CaseIterable, Identifiable {
     var title: String { self == .both ? "One controller" : self == .left ? "Left controller" : "Right controller" }
 }
 struct ControllerChoice: Equatable {
-    var player: Int? = -1
+    var player: Int = -1
     var style: GameControllerStyle = .auto
     var role: ControllerPairRole = .both
 }
@@ -70,7 +70,7 @@ final class ControllerSettingsModel: ObservableObject {
         guard let channel else { return true }
         let rows: [[String: Any]] = controllers.map { device in
             let choice = choices[device.id] ?? ControllerChoice()
-            return ["id": device.id, "player": choice.player ?? 0, "style": choice.style.token, "role": choice.role.rawValue]
+            return ["id": device.id, "player": choice.player, "style": choice.style.token, "role": choice.role.rawValue]
         }
         return channel.start(environment: ProcessInfo.processInfo.environment, choices: rows, explicit: choices.values.contains { $0.player != -1 || $0.style != .auto })
     }
@@ -87,18 +87,14 @@ final class ControllerSettingsModel: ObservableObject {
     func update(_ devices: [LauncherController]) {
         let ids = Set(devices.map(\.id))
         if let identification, !ids.contains(identification.id) { self.identification = nil }
-        var next = choices.filter { ids.contains($0.key) }
-        for device in devices where next[device.id] == nil {
-            next[device.id] = ControllerChoice()
-        }
-        choices = next
+        choices = devices.reduce(into: [:]) { $0[$1.id] = choices[$1.id] ?? ControllerChoice() }
         controllers = devices
     }
 
-    func choosePlayer(_ player: Int?, for id: LauncherController.ID) {
+    func choosePlayer(_ player: Int, for id: LauncherController.ID) {
         guard var choice = choices[id] else { return }
-        if let player, player != -1 && !(1...8).contains(player) { return }
-        if let player, player>0 {
+        guard (-1...8).contains(player) else { return }
+        if player>0 {
             let occupants=controllers.filter { $0.id != id && resolvedPlayer(for:$0.id)==player }
             if occupants.count==1, let other=occupants.first, var peer=choices[other.id] {
                 let ownSide=controllers.first { $0.id==id }?.physicalSide.flatMap(ControllerPairRole.init(rawValue:))
@@ -112,7 +108,7 @@ final class ControllerSettingsModel: ObservableObject {
                 }
             }
         }
-        if let player, player > 0 {
+        if player > 0 {
             let others = choices.filter { $0.key != id && $0.value.player == player }
             for (key, target) in others {
                 let shares = choice.style == .pair && target.style == .pair && choice.role != .both && target.role != .both && choice.role != target.role
@@ -124,19 +120,15 @@ final class ControllerSettingsModel: ObservableObject {
             }
         }
         choice.player = player
-        if player == nil || player == -1 { choice.role = .both }
+        if player <= 0 { choice.role = .both }
         choices[id] = choice
     }
 
     func resolvedPlayer(for id: String) -> Int? {
         if ProcessInfo.processInfo.environment["DM_PAD_MERGE"] == "1",
            choices.values.allSatisfy({ $0.player == -1 && $0.style == .auto }) { return 1 }
-        var used = Set(choices.values.compactMap { choice -> Int? in
-            guard let p = choice.player, p > 0 else { return nil }
-            return p
-        })
-        let fixed=used
-        used.formUnion(controllers.flatMap { $0.reservedPlayers ?? [] }.filter { !fixed.contains($0) })
+        var used = Set(choices.values.map(\.player).filter { $0 > 0 })
+        used.formUnion(controllers.flatMap { $0.reservedPlayers ?? [] })
         for device in controllers {
             let choice = choices[device.id] ?? ControllerChoice()
             let player: Int?
@@ -144,7 +136,7 @@ final class ControllerSettingsModel: ObservableObject {
                 let preferred=device.automaticPlayer
                 player = preferred.flatMap { used.contains($0) ? nil : $0 } ?? (1...8).first { !used.contains($0) }
                 if let player { used.insert(player) }
-            } else { player = choice.player }
+            } else { player = choice.player > 0 ? choice.player : nil }
             if device.id == id { return player }
         }
         return nil
@@ -165,16 +157,15 @@ final class ControllerSettingsModel: ObservableObject {
     var pairingIssue: String? {
         var roles: [Int: Set<ControllerPairRole>] = [:]
         for c in choices.values where c.role != .both {
-            guard let p=c.player, p>0 else { return "Choose a player for each paired controller." }
-            roles[p,default: []].insert(c.role)
+            guard c.player>0 else { return "Choose a player for each paired controller." }
+            roles[c.player,default: []].insert(c.role)
         }
         return roles.values.contains(where: { $0 != Set([.left,.right]) }) ? "Assign a left and a right controller to the same player to complete the pair." : nil
     }
     func chooseRole(_ role: ControllerPairRole, for id: String) {
         guard var choice=choices[id] else { return }
-        let p=choice.player == -1 ? resolvedPlayer(for:id) : choice.player
-        if role != .both { choice.player=p ?? 1 }
-        for key in choices.keys where key != id && choices[key]?.player == choice.player && choice.player != nil && choice.player != -1 {
+        if role != .both { choice.player=resolvedPlayer(for:id) ?? 1 }
+        for key in choices.keys where key != id && choices[key]?.player == choice.player && choice.player > 0 {
             if role == .both || choices[key]?.style != .pair || choices[key]?.role == .both || (choices[key]?.role == role && choice.role == .both) {
                 choices[key]?.player = -1; choices[key]?.role = .both
             } else if choices[key]?.role == role { choices[key]?.role = choice.role }
@@ -222,7 +213,7 @@ struct ControllerSettingsFields: View {
                     }
                     Picker("Player", selection: Binding(
                         get: { model.choices[controller.id]?.player ?? 0 },
-                        set: { model.choosePlayer($0 == 0 ? nil : $0, for: controller.id) })) {
+                        set: { model.choosePlayer($0, for: controller.id) })) {
                         Text(model.automaticPlayerLabel(for: controller.id)).tag(-1)
                         Text("Unassigned").tag(0)
                         ForEach(model.playerSlots(for: controller.id), id: \.self) { Text("Player \($0)").tag($0) }

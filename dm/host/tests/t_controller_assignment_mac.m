@@ -43,7 +43,8 @@ dm_controller_routes dm_controller_current_routes(void) {
 static int side_samples[DM_PLAYERS][2];
 static GCController *group_outputs[DM_PLAYERS][2];
 static NSMutableArray *routing;
-static NSArray<GCController *> *getDevices(void) { return (id)devices; }
+static int deviceReads;
+static NSArray<GCController *> *getDevices(void) { deviceReads++; return (id)devices; }
 static int mode(void) { return 1; }
 static NSMutableArray *readPads;
 static uint32_t releasedSides[DM_PLAYERS];
@@ -299,7 +300,9 @@ int main(void) { @autoreleasepool {
     assert(samples[1] == 1 && samples[0] == 1);
     a.extendedGamepad.valueChangedHandler((id)a.extendedGamepad, (id)a.extendedGamepad); assert(readCalls == 1);
     [routing removeAllObjects];
+    deviceReads=0;
     assert(!controller_assignment_apply(host, swapped, 1, 8, &affected) && !affected && !routing.count && generations[2] == stableGeneration);
+    assert(deviceReads==2); // Validate discovery once, then build one plan for validation and publication.
     int before = published;
     assert(controller_assignment_apply(host, @[swapped[0], @{@"id": bid, @"player": @2, @"style": @"right"}], 0, 8, &affected));
     assert(published == before && !depth && !routing.count && held[0] == (id)b);
@@ -319,7 +322,9 @@ int main(void) { @autoreleasepool {
     slots.owner[0] = &keyboard; own = 1;
     NSArray *automaticChoices = @[@{@"id": aid, @"player": @(-1), @"style": @"auto"},
                                   @{@"id": cid, @"player": @(-1), @"style": @"auto"}];
+    deviceReads=0; NSUInteger routingBeforePreview=routing.count;
     NSArray *preview = controller_assignment_resolve(host, automaticChoices);
+    assert(deviceReads==1 && routing.count==routingBeforePreview);
     assert([preview[0][@"player"] intValue] != 1 && [preview[1][@"player"] intValue] != 1);
     assert(!controller_assignment_apply(host, automaticChoices, 1, 8, &affected));
     assert(slots.owner[0] == &keyboard && own == 1 && !cs_explicit && !explicitRouting);
