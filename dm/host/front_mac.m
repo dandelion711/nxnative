@@ -254,7 +254,7 @@ static void pads_changed(GCController *gone) {
     NSMutableArray<GCController *> *now = [GCController.controllers mutableCopy];
     if (gone) [now removeObject:gone];
     hidpad_twins_eval(gone); hidpad_twins_release();
-    [now filterUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(GCController *c,NSDictionary *bindings) { (void)bindings; return !hidpad_gc_unread(c); }]];
+    now=[hidpad_gc_controllers(now) mutableCopy];
     cs_update(now);
     if (controller_reapply_pairs(now)) return;
     if (g_merge) {
@@ -519,7 +519,7 @@ static void pads_start(void) {
 static DmControllerUI *g_controller_ui;
 
 static NSArray<GCController *> *controller_devices(void) {
-    if (controller_pair_devices) return controller_pair_devices; return GCController.controllers; }
+    if (controller_pair_devices) return controller_pair_devices; return hidpad_gc_controllers(GCController.controllers); }
 static dm_controller_host controller_host(void) {
     return (dm_controller_host){&g_slots, g_held, &g_merge, &g_kbd_own, controller_devices, dm_opmode, pad_read, pad_keep_system_buttons, pro_players_changed, &g_keyboard_owner};
 }
@@ -602,7 +602,7 @@ static void controller_ui_start(NSWindow *parent, NSMenu *bar) {
     g_controller_ui.requestLimits=^(int *minimum,int *maximum) { dm_controller_setup_requirements(NULL,NULL,minimum,maximum); };
     g_controller_ui.snapshot = ^{ return controller_state(); };
     g_controller_ui.identify = ^BOOL(NSString *key) {
-        cs_update(GCController.controllers);
+        cs_update(controller_devices());
         return cs_identify(key, dm_haptics_apple_identify);
     };
     g_controller_ui.requirements = ^{ return controller_requirements(); };

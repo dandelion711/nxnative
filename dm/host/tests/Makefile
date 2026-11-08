@@ -65,6 +65,7 @@ run: $(B)/t_net_eventfd $(B)/t_language $(B)/t_motion $(B)/t_heap_size $(B)/t_to
 	$(B)/t_home_quit
 	$(B)/t_home_quit_mac
 	$(B)/t_controller_setup_mac
+	$(B)/t_controller_inventory_mac
 	$(B)/t_controller_panel_mac
 	$(B)/t_controller_assignment_mac
 	$(B)/t_motion_pro
@@ -415,3 +416,7 @@ sync-wait: $(B)/t_sync_wait
 run: $(B)/t_pad_pro
 $(B)/t_pad_pro: t_pad_pro.c ../pad_pro.h ../dm_input.h | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -fsanitize=address,undefined -I.. -o $@ t_pad_pro.c
+
+run: $(B)/t_controller_inventory_mac
+$(B)/t_controller_inventory_mac: t_controller_inventory_mac.m ../pad_hid_mac.h ../pad_hid.h ../pad_pro.h ../motion_pro.h | $(B)
+	$(CLANG) -O1 -fobjc-arc -Wall -Werror -Wno-unused-function -o $@ $< -framework Foundation -framework GameController -framework IOKit
