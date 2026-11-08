@@ -28,6 +28,7 @@
 #include "home_quit_mac.h"
 #include "controller_join_apple.h"
 #include "controller_join_mac.h"
+#include "controller_assignment_apple.h"
 #include <signal.h>
 #include <math.h>
 #include <sys/stat.h>
@@ -176,6 +177,7 @@ static void on_key(NSEvent *e, int down) {
 static pad_slots g_slots;
 static GCController *g_held[DM_PLAYERS];   // the controller of each slot, kept alive while it holds it (the slot table keys on its pointer)
 static int g_merge, g_kbd_own;
+static const char g_keyboard_owner;
 static int32_t pad_axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * DM_STICK_MAX); }
 // A controller's state for player p, GameController or raw HID: a pressed button or a stick past 15% hides the pointer (cursor_hide_for_input), a resting stick's drift does not
 static void pad_set(int p, uint64_t m, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
@@ -319,9 +321,10 @@ static void display_awake(int on) {
 // Out of focus a controller's changes are ignored, so back in focus each controller is read as it is now (a button still held, a stick still deflected)
 static int g_mouse_down;   // the mouse holds the touch (DmGameView)
 // Nothing the controllers pressed stays pressed (focus lost, the Home quit prompt open)
+static dm_controller_host controller_host(void);
 static void pads_release(void) {
     if (g_merge) { if (merge_pads_left(nil)) dm_pad_set(0, 0, 0, 0, 0); return; }
-    for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p]) dm_pad_set_player(p, 0, 0, 0, 0, 0);
+    controller_assignment_release(controller_host());
     for (hid_pad *d = g_hidpads; d; d = d->next) { int p = pad_slot_of(&g_slots, d); if (p >= 0) dm_pad_set_player(p, 0, 0, 0, 0, 0); }
 }
 static void hidpad_motion_clear(void) {   // the gyro of identical Pro Controllers read from IOKit (pad_hid_mac.h)
@@ -330,7 +333,7 @@ static void hidpad_motion_clear(void) {   // the gyro of identical Pro Controlle
 // Each controller read as it is now (focus back, the Home quit prompt closed)
 static void pads_reread(void) {
     if (g_merge) { for (GCController *c in GCController.controllers) if (c.extendedGamepad) pad_read(c.extendedGamepad); }
-    else for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p].extendedGamepad) pad_read(g_held[p].extendedGamepad);
+    else controller_assignment_reread(controller_host());
     for (hid_pad *d = g_hidpads; d; d = d->next) hidpad_read(d);
 }
 static void hq_close(void);
@@ -501,8 +504,7 @@ static void pads_start(void) {
         }
     }
     e=getenv("DM_PAD_PRESS_TO_JOIN"); g_press_to_join=!g_merge && e && atoi(e); cs_press_to_join=g_press_to_join;
-    static const char kbd = 0;
-    if (g_kbd_own) pad_slot_take(&g_slots, &kbd, "keyboard");   // holds player 1 for good
+    if (g_kbd_own) pad_slot_take(&g_slots, &g_keyboard_owner, "keyboard");   // holds player 1 for good
     LOG("front end: %s", cs_explicit ? "explicit controller players and types from the game launch window" : g_merge ? "every controller is player 1 (DM_PAD_MERGE)" : g_kbd_own ? "the keyboard is player 1, each controller a player of its own from player 2 on (DM_KBD_PLAYER=own)"
                                                                            : "each controller is a player of its own, the keyboard plays with player 1");
     if (g_press_to_join) LOG("front end: a controller becomes a player at its first button press, the lowest player free (DM_PAD_PRESS_TO_JOIN)");
@@ -516,11 +518,10 @@ static void pads_start(void) {
 #include "controller_panel_mac.h"
 static DmControllerUI *g_controller_ui;
 
-#include "controller_assignment_apple.h"
 static NSArray<GCController *> *controller_devices(void) {
     if (controller_pair_devices) return controller_pair_devices; return GCController.controllers; }
 static dm_controller_host controller_host(void) {
-    return (dm_controller_host){&g_slots, g_held, &g_merge, &g_kbd_own, controller_devices, dm_opmode, pad_read, pad_keep_system_buttons, pro_players_changed};
+    return (dm_controller_host){&g_slots, g_held, &g_merge, &g_kbd_own, controller_devices, dm_opmode, pad_read, pad_keep_system_buttons, pro_players_changed, &g_keyboard_owner};
 }
 static BOOL controller_reapply_pairs(NSArray *now) {
     BOOL paired=NO;

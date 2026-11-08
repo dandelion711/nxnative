@@ -45,7 +45,11 @@ static GCController *group_outputs[DM_PLAYERS][2];
 static NSMutableArray *routing;
 static NSArray<GCController *> *getDevices(void) { return (id)devices; }
 static int mode(void) { return 1; }
-static void readPad(GCExtendedGamepad *pad) { (void)pad; readCalls++; }
+static NSMutableArray *readPads;
+static uint32_t releasedSides[DM_PLAYERS];
+static void readPad(GCExtendedGamepad *pad) { [readPads addObject:pad]; readCalls++; }
+void dm_pad_set_player(int p,uint64_t b,int32_t lx,int32_t ly,int32_t rx,int32_t ry) { (void)p; assert(!b && !lx && !ly && !rx && !ry); }
+void dm_pad_set_side(int p,int role,uint64_t b,int32_t x,int32_t y) { assert(!b && !x && !y); releasedSides[p]|=1u<<(role-1); }
 static void keep(GCController *device) { (void)device; keepCalls++; }
 static void changed(GCController *device) { (void)device; assert(depth == 1); published++; }
 void dm_pad_supported(uint32_t *styles, uint32_t *ids) { *styles = supported; *ids = supportedIDs; }
@@ -59,7 +63,8 @@ void dm_pad_reconfigure_reset(uint32_t mask) { assert(depth == 1); reset = mask;
 void dm_pad_reconfigure_end(void) { assert(depth == 1); depth--; }
 static int follows_hold[DM_PLAYERS];
 void dm_pad_style(int player, uint32_t style, int follow_hold) { assert(depth == 1); configured[player] = style; follows_hold[player] = follow_hold; }
-void dm_pad_explicit(int enabled) { assert(depth == 1 && enabled); }
+static BOOL explicitRouting;
+void dm_pad_explicit(int enabled) { assert(depth == 1); explicitRouting=enabled; }
 void dm_pad_players(uint32_t mask) { assert(depth == 1); connected = mask; }
 uint64_t dm_pad_generation(int player) { return generations[player]; }
 void dm_motion_set_generation(int player, uint64_t generation, const float a[3], const float r[3]) { (void)a; (void)r; if (generation == generations[player]) samples[player]++; }
@@ -226,6 +231,40 @@ static void press_to_join_routes(void) {
     puts("press-to-join: waiting preview, first-press order, manual draft and reconnect OK");
 }
 
+static void test_mac_return_automatic(void) {
+    for (int policy=0;policy<4;policy++) {
+        BOOL merged=policy==1, keyboard=policy>=2;
+        setenv("DM_PAD_MERGE",merged ? "1" : "0",1);
+        setenv("DM_KBD_PLAYER",keyboard ? "own" : "shared",1);
+        SwapDevice *a=device(),*b=device(),*waiting=device(); devices=@[a,b,waiting];
+        cs_devices=nil; cs_choices=nil; cs_admitted=nil; cs_explicit=0; cs_press_to_join=YES;
+        memset(configured,0,sizeof configured); memset(grouped_sides,0,sizeof grouped_sides);
+        memset(cs_pair_left,0,sizeof cs_pair_left); memset(cs_pair_right,0,sizeof cs_pair_right);
+        pad_slots slots={0}; GCController *held[DM_PLAYERS]={nil}; int merge=merged,own=keyboard;
+        static const char key=0,raw=0;
+        if (keyboard) pad_slot_assign(&slots,&key,"keyboard",0);
+        connected=pad_slot_mask(&slots);
+        dm_controller_host host={&slots,held,&merge,&own,getDevices,mode,readPad,keep,changed,&key};
+        NSArray *rows=controller_assignment_state(host)[@"controllers"];
+        NSArray *manual=@[@{@"id":rows[0][@"id"],@"player":@1,@"style":@"left"},
+            @{@"id":rows[1][@"id"],@"player":@2,@"style":@"right"},
+            @{@"id":rows[2][@"id"],@"player":@0,@"style":@"auto"}];
+        assert(!controller_assignment_apply(host,manual,0,8,NULL) && cs_explicit && !merge);
+        if (policy==3) { held[0]=nil; slots.owner[0]=&raw; } // a raw owner must survive keyboard restoration
+        NSMutableArray *automatic=[NSMutableArray new];
+        for (NSDictionary *row in rows) [automatic addObject:@{@"id":row[@"id"],@"player":@(-1),@"style":@"auto"}];
+        if (merged) { requestMin=2; assert(controller_assignment_apply(host,automatic,0,8,NULL) && cs_explicit); requestMin=0; }
+        assert(!controller_assignment_apply(host,automatic,0,8,NULL));
+        assert(!cs_explicit && !explicitRouting && merge==merged && own==keyboard && !configured[0]);
+        assert(!cs_choices.count && waiting.extendedGamepad.valueChangedHandler!=nil);
+        if (keyboard) assert(slots.owner[0]==&key && pad_slot_of(&slots,(__bridge const void *)a)>0);
+        if (policy==3) assert(pad_slot_of(&slots,&raw)>0 && !configured[pad_slot_of(&slots,&raw)]);
+        if (!merged) assert(pad_slot_of(&slots,(__bridge const void *)waiting)<0 && cs_waits_for_press((id)waiting,nil));
+    }
+    unsetenv("DM_PAD_MERGE"); unsetenv("DM_KBD_PLAYER"); cs_press_to_join=NO;
+    puts("Mac Automatic reset: default merge, keyboard/raw ownership, first-press waiting and validation OK");
+}
+
 int main(void) { @autoreleasepool {
     press_to_join_routes();
     SwapDevice *a = device(), *b = device(), *c = device(); devices = @[a, b, c]; routing = [NSMutableArray new];
@@ -283,7 +322,7 @@ int main(void) { @autoreleasepool {
     NSArray *preview = controller_assignment_resolve(host, automaticChoices);
     assert([preview[0][@"player"] intValue] != 1 && [preview[1][@"player"] intValue] != 1);
     assert(!controller_assignment_apply(host, automaticChoices, 1, 8, &affected));
-    assert(slots.owner[0] == &keyboard && own == 1);
+    assert(slots.owner[0] == &keyboard && own == 1 && !cs_explicit && !explicitRouting);
     puts("controller assignments: identity, live swaps, stale motion, haptics order, unchanged owners and validation OK");
     devices=@[a,b]; NSArray *pairRows=cs_update((id)devices);
     NSString *pairA=pairRows[0][@"id"], *pairB=pairRows[1][@"id"];
@@ -292,6 +331,11 @@ int main(void) { @autoreleasepool {
     assert(!controller_assignment_apply(host,pairChoices,1,1,&affected));
     assert(connected==1 && grouped_sides[0]==3 && held[0]==(id)a && cs_pair_right[0]==(id)b);
     assert(group_outputs[0][0]==(id)a && group_outputs[0][1]==(id)b);
+    readPads=[NSMutableArray new];
+    controller_assignment_release(host); assert(releasedSides[0]==3);
+    controller_assignment_reread(host);
+    assert(([readPads isEqual:@[a.extendedGamepad,b.extendedGamepad]]));
+    readPads=nil;
     a.motion.valueChangedHandler((id)a.motion); b.motion.valueChangedHandler((id)b.motion);
     assert(side_samples[0][0]==1 && side_samples[0][1]==1);
     NSArray *partial=@[pairChoices[0]]; assert(cs_pair_error(partial));
@@ -352,6 +396,7 @@ int main(void) { @autoreleasepool {
     status=ios_route_status(statusPlan,statusSources,@{},YES,NO,(dm_controller_limits){0x1f,3,1,1});
     assert([status[@"ready"] intValue]==1 && pad_slot_mask(&statusPlan.slots)==3);
     puts("shared readiness: reserved HID, fallback, pair completeness, type constraints and result caps OK");
+    test_mac_return_automatic();
     test_ios_routes(a, b, c);
     test_ios_automatic_compatibility();
     return 0;
