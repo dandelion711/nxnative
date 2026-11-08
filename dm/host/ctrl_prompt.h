@@ -33,7 +33,7 @@ static inline void cp_open_ready(ctrl_prompt *q,int min,int max,int joined,int r
 
 // One step: joined = the players the game sees, waiting = connected controllers that are no player yet, a / b = A / B pressed on any controller (a press that makes a controller
 // join changes joined, so it does not count), confirm / cancel = a key pressed (Return, Escape) or a touch on the prompt's buttons since the last step
-static inline cp_phase cp_step_ready(ctrl_prompt *q, int joined, int ready, int waiting, int a, int b, int confirm, int cancel) {
+static inline cp_phase cp_step_ready(ctrl_prompt *q, int joined, int ready, int waiting, int a, int b, int confirm, int cancel, int active) {
     q->ready=ready;
     switch (q->phase) {
     case CP_IDLE:
@@ -42,8 +42,8 @@ static inline cp_phase cp_step_ready(ctrl_prompt *q, int joined, int ready, int 
         if (joined != q->joined) { q->joined = joined; q->a_up = !a; q->b_up = !b; }
         if (!a) q->a_up = 1;
         if (!b) q->b_up = 1;
-        if ((b && q->b_up) || cancel) { q->phase = CP_SETTLE; q->ok = 0; }   // with A and B at once the safe one wins
-        else if (ready >= q->min && (q->max<=0 || q->min<=q->max) && ((a && q->a_up) || confirm || (q->max > 0 && ready >= q->max) || !waiting)) { q->phase = CP_SETTLE; q->ok = 1; }
+        if (active && ((b && q->b_up) || cancel)) { q->phase = CP_SETTLE; q->ok = 0; }   // with A and B at once the safe one wins
+        else if (ready >= q->min && (q->max<=0 || q->min<=q->max) && ((active && ((a && q->a_up) || confirm)) || (q->max > 0 && ready >= q->max) || !waiting)) { q->phase = CP_SETTLE; q->ok = 1; }
         break;
     case CP_SETTLE:
         if (!a && !b) q->phase = CP_IDLE;
@@ -53,7 +53,7 @@ static inline cp_phase cp_step_ready(ctrl_prompt *q, int joined, int ready, int 
 }
 // Compatibility entry point for callers without a separate readiness snapshot.
 static inline cp_phase cp_step(ctrl_prompt *q,int joined,int waiting,int a,int b,int confirm,int cancel) {
-    return cp_step_ready(q,joined,joined,waiting,a,b,confirm,cancel);
+    return cp_step_ready(q,joined,joined,waiting,a,b,confirm,cancel,1);
 }
 
 // The game gets no controller input in these phases

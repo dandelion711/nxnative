@@ -557,6 +557,7 @@ static int g_join_shown=-1, g_join_on=-1;
 static void controller_join_start(void) {
     g_join=[DmControllerJoin new];
     g_join.available=^BOOL { return g_layer && g_win && g_win.isVisible && !g_text_box; };
+    g_join.inputActive=^BOOL { return g_input_on && !g_text_box && NSApp.isActive; };
     g_join.sample=^(int *joined,int *ready,int *waiting,int *a,int *b) {
         dm_controller_evaluation evaluation=dm_controller_support_evaluation();
         *joined=__builtin_popcount(evaluation.joined); *ready=evaluation.ready_count; *waiting=*a=*b=0;

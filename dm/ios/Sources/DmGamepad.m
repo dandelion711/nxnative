@@ -848,6 +848,7 @@ static void cp_show(const ctrl_prompt *state) {   // the card once per prompt; i
 static void controller_join_start(void) {
     g_join=[DmControllerJoin new];
     g_join.available=^BOOL { return g_view.window && dm_ios_controller_can_join(); };
+    g_join.inputActive=^BOOL { return dm_ios_controller_can_join(); };
     g_join.sample=^(int *joined,int *ready,int *waiting,int *a,int *b) {
         dm_controller_evaluation evaluation=dm_controller_support_evaluation();
         *joined=__builtin_popcount(evaluation.joined); *ready=evaluation.ready_count; *waiting=*a=*b=0;

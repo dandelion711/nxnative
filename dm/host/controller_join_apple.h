@@ -14,6 +14,7 @@
 @public ctrl_prompt state;
 }
 @property (copy) BOOL (^available)(void);
+@property (copy) BOOL (^inputActive)(void);
 @property (copy) void (^sample)(int *joined, int *ready, int *waiting, int *a, int *b);
 @property (copy) void (^show)(const ctrl_prompt *);
 @property (copy) void (^hide)(void);
@@ -85,13 +86,13 @@
     if (state.phase == CP_IDLE) return NO;
     int joined, ready, waiting, a, b; self.sample(&joined, &ready, &waiting, &a, &b);
     cp_phase was = state.phase;
-    cp_step_ready(&state, joined, ready, waiting, a, b, confirm, cancel);
+    cp_step_ready(&state, joined, ready, waiting, a, b, confirm, cancel, !self.inputActive || self.inputActive());
     if (was == CP_OPEN && state.phase == CP_OPEN) self.show(&state);
     if (was == CP_OPEN && state.phase == CP_SETTLE) {
         self.hide();
         DmJoinRequest *request = self.current; self.current = nil;
         request.completion(state.ok);
-        cp_step_ready(&state, joined, ready, 0, a, b, 0, 0);
+        cp_step_ready(&state, joined, ready, 0, a, b, 0, 0, 1);
     }
     if (state.phase == CP_IDLE) {
         [self.releaseTimer invalidate]; self.releaseTimer=nil;

@@ -69,5 +69,28 @@ int main(void) { @autoreleasepool {
     NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:5];
     while (!finished && deadline.timeIntervalSinceNow>0) [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.01]];
     assert(finished && result==1 && ![join blocksInput]);
+    __block BOOL active=YES;
+    join.inputActive=^BOOL { return active; };
+    joined=1; waiting=1; a=b=0;
+    NSUInteger previous=answers.count;
+    [join openMinimum:2 maximum:4 completion:answer];
+    active=NO; b=1; [join pollConfirm:YES cancel:YES];
+    assert(join->state.phase==CP_OPEN && answers.count==previous);
+    b=0; [join poll]; joined=2; a=1; [join poll];
+    assert(join->state.phase==CP_OPEN && join->state.ready==2);
+    active=YES; [join poll];
+    assert(join->state.phase==CP_OPEN); // the held joining A is still not a new press
+    a=0; [join poll]; b=1; [join poll];
+    assert(join->state.phase==CP_SETTLE && answers.count==previous+1 && ![answers.lastObject intValue]);
+    active=NO; [join poll]; assert([join blocksInput]);
+    b=0; [join poll]; assert(![join blocksInput]);
+
+    joined=1; waiting=1;
+    [join openMinimum:2 maximum:2 completion:answer];
+    joined=2; waiting=0; a=1; [join poll];
+    assert(join->state.phase==CP_SETTLE && [answers.lastObject intValue]);
+    [join poll]; assert([join blocksInput]);
+    a=0; [join poll]; assert(![join blocksInput]);
+    puts("joining focus: background actions ignored, counts live and physical releases preserved OK");
     puts("controller joining coordinator OK");
 } return 0; }
