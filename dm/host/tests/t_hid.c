@@ -776,6 +776,29 @@ static void t_pair_full_gamepad_buttons(void) {
     dm_pad_pair_sources(0,0,0); dm_pad_style(0,DM_STYLE_AUTO,0); dm_pad_explicit(0); dm_input_quiesce();
 }
 
+static void t_pair_hid_motion(void) {
+    g_mode=1; ids((uint32_t[]){0},1); h_hid_SetStyles(0x1f);
+    dm_pad_explicit(1); dm_pad_style(0,DM_STYLE_PAIR,0); dm_pad_pair_sources(0,1,3); dm_pad_players(1);
+    dm_motion_clear_side(0,1); dm_motion_clear_side(0,2);
+    motion_now+=100000000;
+    pair_guest_time=motion_now;
+    uint64_t generation=dm_pad_generation(0);
+    for (int i=0;i<3;i++) dm_motion_set_side_sample(0,1,generation,(float[]){0,0,-1},(float[]){0,1,0},motion_now-(2-i)*5000000);
+    CHECK(g_side_motion[0][0].count==3 && !g_side_motion[0][1].count,"three HID samples reach only their assigned pair side");
+    CHECK(g_side_motion[0][0].times[0]==guest_ns()-10000000 && g_side_motion[0][0].times[2]==guest_ns(),"pair HID history preserves sample timestamps rather than batch arrival");
+    uint32_t handles[2]; h_hid_SixHandles(handles,2,&(uint32_t){0},STYLE_JOYDUAL);
+    SixAxisState left,right; h_hid_SixStates(&left,1,&handles[0]); h_hid_SixStates(&right,1,&handles[1]);
+    CHECK(left.gyro[1]>.1f && right.gyro[1]==0,"the guest reads raw motion from the assigned sensor only");
+    dm_motion_set_side_sample(0,1,generation,(float[]){0,0,-1},(float[]){9,0,0},motion_now+1);
+    dm_motion_set_side_sample(0,1,generation,(float[]){0,0,-1},(float[]){9,0,0},motion_now-MOTION_STALE_NS-1);
+    dm_motion_set_side_sample(0,1,generation,(float[]){0,0,-1},(float[]){9,0,0},motion_now-5000000);
+    CHECK(g_side_motion[0][0].count==3,"future, stale and out-of-order pair samples cannot replace valid history");
+    dm_pad_reconfigure_begin(); dm_pad_reconfigure_reset(1); dm_pad_reconfigure_end();
+    dm_motion_set_side_sample(0,1,generation,(float[]){0,0,-1},(float[]){9,0,0},motion_now);
+    CHECK(!g_side_motion[0][0].count,"reassignment rejects raw pair samples from the previous generation");
+    dm_pad_pair_sources(0,0,0); dm_pad_style(0,DM_STYLE_AUTO,0); dm_pad_explicit(0); dm_input_quiesce();
+}
+
 static int support_low, support_high, support_repair; static uint32_t support_styles;
 static int support_options_hook(int minimum,int maximum) {
     support_low=minimum; support_high=maximum;
@@ -953,6 +976,7 @@ int main(void) {
     t_ios_automatic_compatibility();
     t_two_source_pair();
     t_pair_full_gamepad_buttons();
+    t_pair_hid_motion();
     t_support_options();
     t_support_priority();
     t_readiness_differential();

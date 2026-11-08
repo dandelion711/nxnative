@@ -868,17 +868,21 @@ static side_motion g_side_motion[DM_PLAYERS][2]; // protected by the recursive H
 void dm_motion_clear_side(int p, int role) { HID_GUARD;
     if (p >= 0 && p < DM_PLAYERS && role >= 1 && role <= 2) memset(&g_side_motion[p][role-1],0,sizeof(side_motion));
 }
-void dm_motion_set_side_generation(int p, int role, uint64_t generation, const float acc[3], const float rot[3]) { HID_GUARD;
+void dm_motion_set_side_sample(int p, int role, uint64_t generation, const float acc[3], const float rot[3], uint64_t t) { HID_GUARD;
     if (p < 0 || p >= DM_PLAYERS || role < 1 || role > 2 || generation != dm_pad_generation(p)) return;
     pthread_once(&g_motion_once,motion_env); if (g_motion_off) return;
-    side_motion *m=&g_side_motion[p][role-1]; uint64_t t=now_ns();
-    if (m->last && t <= m->last) return;
-    if (!m->last || t-m->received > MOTION_STALE_NS) { memset(m,0,sizeof *m); motion_reset(&m->fusion); }
+    side_motion *m=&g_side_motion[p][role-1]; uint64_t now=now_ns();
+    if (t>now || now-t>MOTION_STALE_NS || (m->last && t<=m->last)) return;
+    if (!m->last || now-m->received > MOTION_STALE_NS) { memset(m,0,sizeof *m); motion_reset(&m->fusion); }
     float dt=m->last ? (float)((double)(t-m->last)/1e9) : 0;
     motion_update(&m->fusion,&g_motion_map,acc,rot,dt,g_motion_gain);
     unsigned i=m->count++ % SIDE_HISTORY;
     motion_fill(&m->fusion,m->samples[i].acc,m->samples[i].gyro,m->samples[i].angle,m->samples[i].dir);
-    m->times[i]=guest_ns(); m->last=m->received=t;
+    uint64_t guest=guest_ns(), age=now-t;
+    m->times[i]=guest>age ? guest-age : 0; m->last=t; m->received=now;
+}
+void dm_motion_set_side_generation(int p, int role, uint64_t generation, const float acc[3], const float rot[3]) {
+    dm_motion_set_side_sample(p,role,generation,acc,rot,now_ns());
 }
 static int pair_motion_read(int p, unsigned side, uint64_t time, pair_motion_sample *out) {
     if (p < 0 || p >= DM_PLAYERS || side > 1 || atomic_load(&g_motion_suspended)) return 0;

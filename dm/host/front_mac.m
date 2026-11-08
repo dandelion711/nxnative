@@ -224,11 +224,12 @@ static void pad_keep_system_buttons(GCController *c) {
 static const char *pad_name(GCController *c) { return c.vendorName.UTF8String ?: "?"; }
 static void npad_name(int p, char *out, size_t cap) { uint32_t id = dm_player_npad(p); if (id == 0x20) snprintf(out, cap, "handheld"); else snprintf(out, cap, "%u", id); }
 static void pro_players_changed(GCController *gone) {
-    int count = 0, player = -1;
-    for (GCController *c in GCController.controllers) if (c != gone && c.extendedGamepad && [c.productCategory isEqualToString:@"Switch Pro Controller"]) {
-        count++; player = g_merge ? 0 : pad_slot_of(&g_slots, (__bridge const void *)c);
+    int count = 0, player = -1, role=0;
+    for (GCController *c in GCController.controllers) if (c != gone && c.extendedGamepad && !hidpad_gc_unread(c) && [c.productCategory isEqualToString:@"Switch Pro Controller"]) {
+        role=cs_explicit ? cs_device_role(c,cs_choices) : 0;
+        count++; player = role ? cs_player(c,NULL) : g_merge ? 0 : pad_slot_of(&g_slots, (__bridge const void *)c);
     }
-    dm_motion_pro_players(count, player);
+    dm_motion_pro_players_role(count, player, count==1 ? role : 0);
 }
 static void pro_devices_changed(void) { pro_players_changed(nil); }
 // DM_PAD_PRESS_TO_JOIN=1: a controller is no player until one of its buttons is pressed, then it is the lowest player free, as a console's "press a button" screen.
