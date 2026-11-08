@@ -2,6 +2,7 @@
 // A0 B1 X2 Y3 StickL4 StickR5 L6 R7 ZL8 ZR9 Plus10 Minus11 Left12 Up13 Right14 Down15; sticks ±32767.
 #pragma once
 #include <stdint.h>
+int dm_players_reported(void);   // upstream joining count; deliberately separate from editor readiness
 // Button bits (= nn::hid::NpadButton bit order; the DM_KEYS key-name table in hle_hid.c is generated from here). Frontends always compose buttons from these names.
 enum {
     DM_BTN_A = 1u << 0, DM_BTN_B = 1u << 1, DM_BTN_X = 1u << 2, DM_BTN_Y = 1u << 3,
@@ -55,7 +56,8 @@ void dm_motion_suspend(int suspended);   // temporarily hide live motion while c
 void dm_input_quiesce(void);   // discard physical buttons, sticks and press latches while a native input UI is open
 uint64_t dm_pad_generation(int player);
 void dm_motion_set_generation(int player, uint64_t generation, const float acc[3], const float rot[3]);
-// Frontends install the asynchronous native controller UI bridge before guest startup.
+// Frontends install the native editor bridge before guest startup. The joining
+// popup has priority; this fallback is called only for an incompatible setup.
 // Returns 1 for Apply, 0 for Cancel, -1 when unavailable (legacy/headless behavior).
 extern int (*dm_controller_support_hook)(int minimum, int maximum);
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);

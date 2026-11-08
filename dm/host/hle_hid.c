@@ -692,7 +692,8 @@ HLE_FORCE("_ZN2nn3hid18SwapNpadAssignmentERKjS2_", "swap controller ids; ignored
 HLE_FORCE("_ZN2nn3hid21StartLrAssignmentModeEv", "L/R assignment mode; ignored by the host", void, h_hid_LrStart, void) {}
 HLE_FORCE("_ZN2nn3hid20StopLrAssignmentModeEv", "L/R assignment mode; ignored by the host", void, h_hid_LrStop, void) {}
 // ControllerSupportArg begins with { int8 playerCountMin, playerCountMax } and the
-// result is { int playerCount; uint32 selectedId }. Apple frontends wait for their native sheet.
+// result is { int playerCount; uint32 selectedId }. Apple frontends prioritize
+// the upstream joining card and otherwise configure an incompatible setup.
 // Front ends without that hook keep the legacy result from currently connected players.
 // Native Cancel, or fewer players than the minimum, returns 2202-3101 as the SDK expects
 // (Mario Kart 8 Deluxe's 2P request, issue #550). Returning OK below the minimum makes
@@ -703,6 +704,21 @@ typedef struct controller_request {
     struct controller_request *next;
 } controller_request;
 static controller_request *g_controller_requests; // protected by the HID barrier
+// Keep upstream's joining count separate from configured-style readiness. Their
+// reconciliation is a follow-up, not a change to the established popup trigger.
+int dm_players_reported(void) { HID_GUARD; int n=0; for (int p=0;p<DM_PLAYERS;p++) n+=reported(p); return n; }
+// The existing final-result calculation, reused only to avoid opening an editor
+// for an already valid setup. This does not replace joining or UI preview counts.
+static int controller_support_count(const controller_request *request, uint32_t *selected_id) { HID_GUARD;
+    int count=0; uint32_t selected=connected_id();
+    for (int p=0;p<DM_PLAYERS;p++) {
+        uint32_t style=style_of(dm_player_npad(p));
+        if (!style || (!request->permit_pair && style==STYLE_JOYDUAL)) continue;
+        if (!count) selected=dm_player_npad(p); count++;
+    }
+    if (selected_id) *selected_id=selected;
+    return count;
+}
 void dm_controller_setup_requirements(uint32_t *styles, uint32_t *ids, int *minimum, int *maximum) { HID_GUARD;
     uint32_t allowed=atomic_load(&g_styles_supported); int low=0, high=DM_PLAYERS;
     for (controller_request *r=g_controller_requests;r;r=r->next) {
@@ -721,18 +737,23 @@ static Result ctrl_support(int32_t *info, const int8_t *arg) {
     if (request.single) request.minimum=request.maximum=1;
     { HID_GUARD; request.next=g_controller_requests; g_controller_requests=&request; }
     // Keep the guest outside the HID barrier while its native sheet is open.
-    int answer=dm_controller_support_hook ? dm_controller_support_hook(request.minimum,request.maximum) : -1;
+    const char *keys=getenv("DM_KEYS"), *ctl=getenv("DM_CTL");
+    int joined=dm_players_reported(), joining=arg && arg[0]>joined;
+    int answer=-1;
+    if (!((keys && *keys) || (ctl && *ctl))) {
+        // The upstream popup always has priority in precisely the cases where
+        // upstream invokes it. Do not reinterpret its raw limits/count here.
+        if (joining) answer=front_ctrl_support(arg[0],arg[1]);
+        else if (dm_controller_support_hook && controller_support_count(&request,NULL)<request.minimum)
+            answer=dm_controller_support_hook(request.minimum,request.maximum);
+    }
     HID_GUARD;
     controller_request **link=&g_controller_requests;
     while (*link && *link!=&request) link=&(*link)->next;
     if (*link) *link=request.next;
-    int count=0; uint32_t selected=connected_id();
-    for (int p=0;p<DM_PLAYERS;p++) {
-        uint32_t style=style_of(dm_player_npad(p));
-        if (!style || (!request.permit_pair && style==STYLE_JOYDUAL)) continue;
-        if (!count) selected=dm_player_npad(p); count++;
-    }
-    int canceled=answer==0 || count<request.minimum;
+    uint32_t selected;
+    int count=controller_support_count(&request,&selected);
+    int canceled=answer==0 || (joining && answer<0) || count<request.minimum;
     LOG("hid controller applet: requested %d to %d, effective %d to %d players, single=%u, pair=%u, %d connected%s",arg ? arg[0] : 1,arg ? arg[1] : DM_PLAYERS,request.minimum,request.maximum,request.single,request.permit_pair,count,canceled ? ": canceled" : "");
     if (count>request.maximum) count=request.maximum;
     if (info) { info[0]=count; info[1]=(int32_t)selected; }

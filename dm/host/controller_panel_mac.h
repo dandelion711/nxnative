@@ -415,6 +415,7 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
 // Both routes share this coordinator and the same sheet. A guest caller waits on
 // its own thread. The main queue stays free for hotplug, input and Apply callbacks.
 @interface DmControllerUI : NSObject
+@property (copy) void (^requestLimits)(int *, int *);
 @property(weak) NSWindow *parent;
 @property(copy) NSDictionary *(^snapshot)(void);
 @property(copy) BOOL (^identify)(NSString *);
@@ -426,6 +427,7 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
 @property DmControllerPanel *panel;
 @property NSMutableArray *waiters;
 - (void)showFromMenu:(id)sender;
+- (void)showForRequest:(id)sender;
 - (void)openMinimum:(int)minimum maximum:(int)maximum completion:(void (^)(BOOL))completion;
 - (int)requestMinimum:(int)minimum maximum:(int)maximum;
 - (void)refresh;
@@ -436,7 +438,15 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
     (void)sender;
     if (self.parent.miniaturized) [self.parent deminiaturize:nil];
     if (!self.panel) [self.parent makeKeyAndOrderFront:nil];
-    [self openMinimum:0 maximum:8 completion:nil];
+    int minimum=0,maximum=8;
+    if (self.requestLimits) self.requestLimits(&minimum,&maximum);
+    [self openMinimum:minimum maximum:maximum completion:nil];
+}
+- (void)showForRequest:(id)sender {
+    (void)sender;
+    int minimum=0,maximum=8;
+    if (self.requestLimits) self.requestLimits(&minimum,&maximum);
+    [self openMinimum:minimum maximum:maximum completion:^(BOOL applied) { (void)applied; }];
 }
 - (void)openMinimum:(int)minimum maximum:(int)maximum completion:(void (^)(BOOL))completion {
     if (!self.parent) { if (completion) completion(NO); return; }

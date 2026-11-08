@@ -13,6 +13,13 @@ static int hid_usleep(useconds_t usec);
 #include "../pad_slots.h"
 void dm_oe_execute(int index, const void *param, size_t n) { (void)index; (void)param; (void)n; }   // DM_CTL "program", "webshot": not exercised here
 void front_web_shot(const char *path) { (void)path; }
+static int prompt_calls, prompt_min, prompt_max, prompt_answer=-1;
+static uint32_t prompt_join;
+int front_ctrl_support(int minimum,int maximum) {
+    prompt_calls++; prompt_min=minimum; prompt_max=maximum;
+    if (prompt_join) dm_pad_players(prompt_join);
+    return prompt_answer;
+}
 
 static int checks, fails, g_mode = 1, g_signals;
 static void *g_signalled;
@@ -631,6 +638,7 @@ static int controller_hook_answer, controller_hook_calls, controller_hook_min, c
 static int controller_hook(int minimum, int maximum) {
     CHECK(applet_depth == 1, "native controller request stays within the applet focus lifetime");
     controller_hook_calls++; controller_hook_min = minimum; controller_hook_max = maximum;
+    if (controller_hook_answer) dm_pad_style(0,DM_STYLE_PRO,0);
     return controller_hook_answer;
 }
 static _Atomic int live_reader_started, live_reader_finished;
@@ -676,6 +684,7 @@ static void t_live_apply(void) {
     dm_input_set(DM_BTN_X, 0, 0, 0, 0); dm_input_quiesce();
     NpadState state; fill(&state, 0, STYLE_JOYRIGHT);
     CHECK(!state.buttons, "opening configuration discards physical held input and pending press edges");
+    h_hid_SetStyles(STYLE_FULLKEY); // current JoyRight needs configuration while both slots remain joined
     dm_controller_support_hook = controller_hook;
     int8_t arg[32] = {2, 4}; int32_t info[2];
     controller_hook_answer = 0;
@@ -684,6 +693,7 @@ static void t_live_apply(void) {
     controller_hook_answer = 1;
     CHECK(h_hid_ShowCtrl0(arg) == RES_OK && controller_hook_calls == 2, "the no-result applet overload also waits for native Apply");
     dm_controller_support_hook = NULL;
+    h_hid_SetStyles(0x1f);
     dm_pad_explicit(0); dm_pad_style(0, DM_STYLE_AUTO, 0); dm_pad_style(1, DM_STYLE_AUTO, 0); g_mode = 0; dm_pad_players(1);
     static uint8_t handheld[0x40], external[0x40];
     h_hid_BindStyleEv(&(uint32_t){NPAD_HANDHELD}, handheld, 0); h_hid_BindStyleEv(&(uint32_t){0}, external, 0);
@@ -764,27 +774,70 @@ static void t_pair_full_gamepad_buttons(void) {
     dm_pad_pair_sources(0,0,0); dm_pad_style(0,DM_STYLE_AUTO,0); dm_pad_explicit(0); dm_input_quiesce();
 }
 
-static int support_low, support_high; static uint32_t support_styles;
+static int support_low, support_high, support_repair; static uint32_t support_styles;
 static int support_options_hook(int minimum,int maximum) {
     support_low=minimum; support_high=maximum;
     int low,high; dm_controller_setup_requirements(&support_styles,NULL,&low,&high);
     CHECK(low==minimum && high==maximum,"native sheet and engine share the effective request limits");
+    if (support_repair) { dm_pad_style(0,DM_STYLE_PRO,0); dm_pad_style(1,DM_STYLE_PRO,0); }
     return 1;
 }
 static void t_support_options(void) {
     g_mode=1; ids((uint32_t[]){0,1},2); h_hid_SetStyles(0x1f);
     dm_pad_explicit(0); dm_pad_style(0,DM_STYLE_AUTO,0); dm_pad_style(1,DM_STYLE_AUTO,0); dm_pad_players(3);
+    dm_pad_style(0,DM_STYLE_RIGHT,0); dm_pad_style(1,DM_STYLE_RIGHT,0); h_hid_SetStyles(STYLE_FULLKEY|STYLE_JOYDUAL); support_repair=1;
     int8_t arg[8]={2,4,1,1,1,1}; int32_t info[2]; dm_controller_support_hook=support_options_hook;
     CHECK(h_hid_ShowCtrl(info,arg)==RES_OK && support_low==1 && support_high==1 && info[0]==1,"single mode overrides the raw multiplayer range and returns one player");
+    support_repair=0;
     CHECK(support_styles & STYLE_JOYDUAL,"a permitted Joy-Con pair stays available to setup");
     int low,high; dm_controller_setup_requirements(NULL,NULL,&low,&high);
     CHECK(low==0 && high==DM_PLAYERS,"finishing the request releases its temporary count constraints");
     dm_pad_explicit(1); dm_pad_style(0,DM_STYLE_PAIR,0); dm_pad_players(1);
+    arg[0]=1; // pair permission here; raw-versus-effective joining limits are tested separately
     arg[4]=0;
     CHECK(h_hid_ShowCtrl(info,arg)==RES_CTRL_CANCELED && !(support_styles&STYLE_JOYDUAL) && !info[0],"an unpermitted pair cannot satisfy a request even if a UI reports Apply");
     arg[4]=1;
     CHECK(h_hid_ShowCtrl(info,arg)==RES_OK && info[0]==1,"two-hand pair style is one player in single mode");
     dm_controller_support_hook=NULL; dm_pad_style(0,DM_STYLE_AUTO,0); dm_pad_explicit(0); dm_pad_players(1); h_hid_SetStyles(0xffffffffu);
+}
+
+static int fallback_calls, fallback_repair;
+static int fallback_hook(int minimum,int maximum) {
+    (void)minimum; (void)maximum; fallback_calls++;
+    if (fallback_repair) { dm_pad_style(0,DM_STYLE_LEFT,0); dm_pad_style(1,DM_STYLE_RIGHT,0); }
+    return 1;
+}
+static void t_support_priority(void) {
+    g_mode=1; ids((uint32_t[]){0,1},2); h_hid_SetStyles(0x1f);
+    dm_pad_explicit(0); dm_pad_style(0,0,0); dm_pad_style(1,0,0); dm_pad_players(1);
+    int8_t arg[8]={2,4,1,1,1,0}; int32_t info[2];
+    dm_controller_support_hook=fallback_hook; fallback_calls=prompt_calls=0;
+    prompt_answer=1; prompt_join=3;
+    CHECK(h_hid_ShowCtrl(info,arg)==RES_OK && info[0]==2,"upstream card recounts a player joining while it waits");
+    CHECK(prompt_calls==1 && prompt_min==2 && prompt_max==4 && !fallback_calls,"upstream popup has exclusive priority below its raw minimum");
+    dm_pad_players(1); prompt_join=0; prompt_answer=0;
+    CHECK(h_hid_ShowCtrl0(arg)==RES_CTRL_CANCELED && prompt_calls==2 && !fallback_calls,"Cancel on the original popup never launches the fallback editor");
+    prompt_answer=-1;
+    CHECK(h_hid_ShowCtrl(info,arg)==RES_CTRL_CANCELED && !fallback_calls,"an unavailable joining window stays noninteractive");
+    dm_pad_players(3);
+    CHECK(h_hid_ShowCtrl(info,arg)==RES_OK && !fallback_calls && prompt_calls==3,"an already valid setup skips both the upstream popup and our editor");
+    h_hid_SetStyles(DM_STYLE_LEFT|DM_STYLE_RIGHT); fallback_repair=1;
+    CHECK(h_hid_ShowCtrl(info,arg)==RES_OK && fallback_calls==1 && prompt_calls==3,"a skipped popup with incompatible types opens the editor and accepts the repaired configuration");
+    fallback_repair=0;
+    const char *names[]={"DM_KEYS","DM_CTL"};
+    for (int i=0;i<2;i++) {
+        setenv(names[i],"nonempty",1); dm_pad_players(1);
+        CHECK(h_hid_ShowCtrl(info,arg)==RES_CTRL_CANCELED && prompt_calls==3 && fallback_calls==1,"scripts bypass both presentations below minimum");
+        dm_pad_players(3);
+        CHECK(h_hid_ShowCtrl(info,arg)==RES_OK && prompt_calls==3 && fallback_calls==1,"scripts bypass the editor fallback with enough players too");
+        unsetenv(names[i]);
+    }
+    // Preserve the raw joining trigger, even where effective single-mode
+    // requirements differ. This discrepancy is documented, not fixed here.
+    dm_pad_players(1); arg[5]=1;
+    CHECK(h_hid_ShowCtrl(info,arg)==RES_CTRL_CANCELED && prompt_calls==4 && prompt_min==2 && prompt_max==4 && fallback_calls==1,"single-mode normalization does not silently rewrite upstream popup policy");
+    dm_controller_support_hook=NULL; prompt_answer=-1; prompt_join=0;
+    dm_pad_style(0,0,0); dm_pad_style(1,0,0); dm_pad_players(1); h_hid_SetStyles(0xffffffffu);
 }
 
 int main(void) {
@@ -817,6 +870,7 @@ int main(void) {
     t_two_source_pair();
     t_pair_full_gamepad_buttons();
     t_support_options();
+    t_support_priority();
     printf("hid players: %d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

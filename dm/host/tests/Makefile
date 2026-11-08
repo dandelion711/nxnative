@@ -13,6 +13,9 @@ GINC = $(if $(strip $(GAME)),-I../gen/$(GAME) -I../../games/$(GAME),$(error GAME
 $(B)/t_fs $(B)/t_fs_case $(B)/t_fs_commit_list $(B)/t_fs_commit_list_tsan: ../romfs_image.h
 GAME_H = ../gen/$(GAME)/game_profile.h
 run: $(B)/t_net_eventfd $(B)/t_language $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_output_stream $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pollwait $(B)/t_pctl $(B)/t_sf $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple $(B)/t_cheats $(B)/t_pad_hid
+	$(B)/t_ctrl_prompt
+	$(B)/t_controller_join_apple
+	$(B)/t_controller_join_mac
 	$(B)/t_language
 	$(B)/t_heap_size
 	$(B)/t_touch
@@ -387,3 +390,13 @@ coverage:
 	rm -rf $(B)/cov/prof
 	LLVM_PROFILE_FILE="$(call cov_profile,$(B)/cov)" $(MAKE) -i B=$(B)/cov SAN="$(COV_FLAGS)" run
 	@$(call cov_export,$(B)/cov)
+
+# Original upstream joining rules and the shared Apple editor/prompt owner.
+run: $(B)/t_ctrl_prompt $(B)/t_controller_join_apple $(B)/t_controller_join_mac
+$(B)/t_ctrl_prompt: t_ctrl_prompt.c ../ctrl_prompt.h | $(B)
+	$(CLANG) -O1 -Wall -Werror -o $@ $<
+$(B)/t_controller_join_apple: t_controller_join_apple.m ../controller_join_apple.h ../ctrl_prompt.h | $(B)
+	$(CLANG) -O1 -Wall -Werror -fobjc-arc -o $@ $< -framework Foundation
+
+$(B)/t_controller_join_mac: t_controller_join_mac.m ../controller_join_mac.h ../controller_join_apple.h ../ctrl_prompt.h ../controller_panel_mac.h ../home_quit_mac.h | $(B)
+	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -fobjc-arc -o $@ $< -framework AppKit -framework QuartzCore

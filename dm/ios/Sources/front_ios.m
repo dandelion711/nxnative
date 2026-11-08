@@ -116,6 +116,11 @@ void dm_ios_controller_limits(int *minimum, int *maximum) {
     *minimum = g_root.controllerMinimum;
     *maximum = g_root.controllerMaximum;
 }
+BOOL dm_ios_controller_can_join(void) {
+    UIWindowScene *scene=g_root.viewIfLoaded.window.windowScene;
+    return scene && scene.activationState==UISceneActivationStateForegroundActive &&
+        (!g_root.presentedViewController || g_root.presentedViewController==g_root.controllerSetup);
+}
 static int controller_support(int minimum, int maximum) {
     if (NSThread.isMainThread) return -1;
     // The guest waits here without holding the HID lock. UIKit, hotplug and
@@ -131,6 +136,12 @@ static int controller_support(int minimum, int maximum) {
     });
     dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
     return applied ? 1 : 0;
+}
+void dm_ios_controller_open_join(void (^completion)(BOOL)) {
+    int minimum=0,maximum=DM_PLAYERS;
+    dm_controller_setup_requirements(NULL,NULL,&minimum,&maximum);
+    if (!g_root) { completion(NO); return; }
+    [g_root openControllerSetup:minimum maximum:maximum completion:completion];
 }
 // UIAction dismisses the gear menu. Present on the next main-queue turn and
 // reuse the applet sheet, including its pending-request limits and input gate.
@@ -637,13 +648,13 @@ void front_ios_focus_event(int ev) {
     if (!g_layer) return;
     switch (ev) {
         case 0: dm_gamepad_reset(); dm_focus_set(2); break;
-        case 1: [g_root cancelControllerSetup]; UIApplication.sharedApplication.idleTimerDisabled = NO; dm_focus_set(3); g_audio_bg = 1; front_ios_audio_apply(); guest_clock_freeze_for(1, 1); dm_gfx_suspend(1); save_sync_background(); break;
+        case 1: dm_gamepad_cancel_join(); [g_root cancelControllerSetup]; UIApplication.sharedApplication.idleTimerDisabled = NO; dm_focus_set(3); g_audio_bg = 1; front_ios_audio_apply(); guest_clock_freeze_for(1, 1); dm_gfx_suspend(1); save_sync_background(); break;
         case 2: dm_gfx_suspend(0); guest_clock_freeze_for(1, 0); front_ios_audio_session(); g_audio_bg = 0; front_ios_audio_apply(); dm_focus_set(2); break;
         case 3:   // Becoming active again also ends an interruption whose "ended" never came (not every one sends it), and retries a session that would not activate on the way back
             UIApplication.sharedApplication.idleTimerDisabled = YES;
             if (g_audio_intr) { LOG("audio session: active again with no interruption-ended notice; resuming"); g_audio_intr = 0; g_session_off = 1; }
             if (g_session_off) front_ios_audio_session();
             front_ios_audio_apply(); dm_gamepad_active(); dm_focus_set(1); break;
-        case 4: [g_root cancelControllerSetup]; break;   // main scene disconnected
+        case 4: dm_gamepad_cancel_join(); [g_root cancelControllerSetup]; break;   // main scene disconnected
     }
 }

@@ -144,6 +144,8 @@ dm/third_party/ryujinx/src/Ryujinx.Graphics.Shader/Translation/Transforms/Geomet
 
 # Native Apple controller configuration and game-facing styles
 dm/host/controller*.h	hle:_ZN2nn3hid*	controller discovery, assignment, readiness and native controller applets
+dm/host/ctrl_prompt.h	hle:_ZN2nn3hid*ShowControllerSupport*	controller joining completion and input settling
+dm/host/home_quit_mac.h	present:*	the shared Mac Home and controller-joining card views
 dm/host/pad_slots.h	hle:_ZN2nn3hid*	physical controller player slots
 dm/host/pad_style.h	hle:_ZN2nn3hid*	single and paired Joy-Con state conversion
 dm/host/haptics_apple.*	hle:*Vibration*	Apple controller rumble and device identification

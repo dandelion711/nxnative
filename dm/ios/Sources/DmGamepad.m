@@ -29,6 +29,7 @@
 #include "pad_apple.h"
 #include "pad_slots.h"
 #include "controller_routes_ios.h"
+#include "controller_join_apple.h"
 #import "ControllerSetup.h"
 #include <stdatomic.h>
 #import "DmLayout.h"
@@ -37,13 +38,14 @@
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
 enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_GAME };   // which control a touch holds; C_GAME: none, the touch goes to the game's touch screen (finger slot << 8)
 
-static _Atomic int g_configuring;
+static _Atomic int g_configuring, g_join_blocked;
+static DmControllerJoin *g_join;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_touch_btn, g_shake_btn;
 static int32_t g_touch_lx, g_touch_ly, g_touch_rx, g_touch_ry;
 static void publish(void) {   // the touch gamepad and the shake; the host ORs them with player 1's controller and takes whichever stick is deflected more (hle_hid.c)
     pthread_mutex_lock(&g_mu);
-    if (!atomic_load(&g_configuring))
+    if (!atomic_load(&g_configuring) && !atomic_load(&g_join_blocked))
         dm_input_set(g_touch_btn | g_shake_btn, g_touch_lx, g_touch_ly, g_touch_rx, g_touch_ry);
     pthread_mutex_unlock(&g_mu);
 }
@@ -600,7 +602,7 @@ BOOL dm_ios_controller_identify(NSString *deviceID) {
 
 static int32_t axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * 32767); }
 static void read_pad(GCExtendedGamepad *g) {
-    if (atomic_load(&g_configuring)) return;
+    if ([g_join poll] || atomic_load(&g_configuring)) return;
     GCController *controller = g.controller;
     int p = pad_slot_of(&g_routes.slots, (__bridge const void *)controller);
     if (p < 0) for (int slot=0;slot<DM_PLAYERS;slot++) if ([g_sources[slot] containsObject:controller]) { p=slot; break; }
@@ -769,6 +771,7 @@ NSString *dm_ios_controller_apply(NSArray<NSDictionary<NSString *, id> *> *choic
         dispatch_async(dispatch_get_main_queue(), ^{ [self padsChanged:note]; });
         return;
     }
+    dispatch_async(dispatch_get_main_queue(), ^{ [g_join poll]; });
     NSMutableArray *connected = [GCController.controllers mutableCopy];
     if ([note.name isEqual:GCControllerDidDisconnectNotification]) [connected removeObjectIdenticalTo:note.object];
     NSArray *rows = cs_update(connected);
@@ -794,14 +797,110 @@ NSString *dm_ios_controller_apply(NSArray<NSDictionary<NSString *, id> *> *choic
 }
 @end
 
-UIView *dm_gamepad_view(CGRect frame) { DmGamepad *v = [[DmGamepad alloc] initWithFrame:frame]; g_view = v; return v; }
+// The upstream joining card remains the applet owner. Its Configure action
+// opens the same editor as the gear; the shared coordinator suspends the card.
+static UIView *g_cp_view; static UILabel *g_cp_count; static UIButton *g_cp_done_btn;
+@interface DmCtrlPrompt : NSObject @end
+@implementation DmCtrlPrompt
+- (void)done { [g_join pollConfirm:YES cancel:NO]; }
+- (void)cancel { [g_join pollConfirm:NO cancel:YES]; }
+- (void)configure {
+    [g_join beginEditing];
+    dm_ios_controller_open_join(^(BOOL applied) { (void)applied; [g_join endEditing]; });
+}
+@end
+static DmCtrlPrompt *g_cp_target;
+static UILabel *cp_label(const char *text, CGFloat size, UIFontWeight w, CGFloat alpha) {
+    UILabel *l = [UILabel new]; l.text = @(text); l.font = [UIFont systemFontOfSize:size weight:w]; l.textColor = [UIColor colorWithWhite:1 alpha:alpha];
+    l.numberOfLines = 0; l.textAlignment = NSTextAlignmentCenter; return l;
+}
+static UIButton *cp_button(const char *title, SEL action, int primary) {
+    UIButtonConfiguration *cfg = primary ? UIButtonConfiguration.filledButtonConfiguration : UIButtonConfiguration.grayButtonConfiguration;
+    cfg.title = @(title); cfg.cornerStyle = UIButtonConfigurationCornerStyleCapsule; cfg.buttonSize = UIButtonConfigurationSizeLarge;
+    UIButton *b = [UIButton buttonWithConfiguration:cfg primaryAction:nil];
+    [b addTarget:g_cp_target action:action forControlEvents:UIControlEventTouchUpInside]; return b;
+}
+static void cp_show(const ctrl_prompt *state) {   // the card once per prompt; its count and its Done button follow each step
+    const char *env = getenv("DM_CTRL_PROMPT_TEXT"); char t[CP_TEXTS][256];
+    for (int i = 0; i < CP_TEXTS; i++) cp_text(env, i, state, t[i], sizeof t[i]);
+    if (!g_cp_view) {
+        UIWindow *w = g_view.window;
+        if (!w) return;
+        if (!g_cp_target) g_cp_target = [DmCtrlPrompt new];
+        UIView *scrim = [[UIView alloc] initWithFrame:w.bounds]; scrim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        scrim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
+        g_cp_count = cp_label(t[CP_TEXT_COUNT], 20, UIFontWeightSemibold, 0.9);
+        g_cp_done_btn = cp_button(t[CP_TEXT_DONE], @selector(done), 1);
+        UIStackView *actions = [[UIStackView alloc] initWithArrangedSubviews:@[g_cp_done_btn, cp_button(t[CP_TEXT_CANCEL], @selector(cancel), 0)]];
+        actions.spacing = 16; actions.distribution = UIStackViewDistributionFillEqually;
+        UIStackView *card = [[UIStackView alloc] initWithArrangedSubviews:@[cp_label(t[CP_TEXT_TITLE], 26, UIFontWeightBold, 1), cp_label(t[CP_TEXT_HINT], 17, UIFontWeightRegular, 0.6), g_cp_count, actions, cp_button(NSLocalizedString(@"Configure controllers…",nil).UTF8String,@selector(configure),0)]];
+        card.axis = UILayoutConstraintAxisVertical; card.spacing = 14; [card setCustomSpacing:28 afterView:g_cp_count];
+        card.layoutMargins = UIEdgeInsetsMake(32, 36, 28, 36); card.layoutMarginsRelativeArrangement = YES;
+        card.backgroundColor = [UIColor colorWithRed:0.10 green:0.10 blue:0.11 alpha:1]; card.layer.cornerRadius = 28;
+        card.translatesAutoresizingMaskIntoConstraints = NO;
+        // Keep upstream's card readable in a short landscape window. Scroll
+        // its contents only when the additional Configure action cannot fit.
+        UIScrollView *scroll=[UIScrollView new]; scroll.translatesAutoresizingMaskIntoConstraints=NO;
+        scroll.backgroundColor=card.backgroundColor; scroll.layer.cornerRadius=28; scroll.clipsToBounds=YES;
+        [scroll addSubview:card]; [scrim addSubview:scroll];
+        NSLayoutConstraint *wide=[scroll.widthAnchor constraintEqualToConstant:520]; wide.priority=UILayoutPriorityDefaultHigh;
+        NSLayoutConstraint *height=[scroll.heightAnchor constraintEqualToAnchor:card.heightAnchor]; height.priority=UILayoutPriorityDefaultLow;
+        [NSLayoutConstraint activateConstraints:@[
+            [scroll.centerXAnchor constraintEqualToAnchor:scrim.safeAreaLayoutGuide.centerXAnchor], [scroll.centerYAnchor constraintEqualToAnchor:scrim.safeAreaLayoutGuide.centerYAnchor],
+            [scroll.widthAnchor constraintLessThanOrEqualToAnchor:scrim.safeAreaLayoutGuide.widthAnchor constant:-24], wide, height,
+            [scroll.topAnchor constraintGreaterThanOrEqualToAnchor:scrim.safeAreaLayoutGuide.topAnchor constant:8],
+            [scroll.bottomAnchor constraintLessThanOrEqualToAnchor:scrim.safeAreaLayoutGuide.bottomAnchor constant:-8],
+            [card.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor],
+            [card.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor],
+            [card.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
+            [card.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
+            [card.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor]]];
+        [w addSubview:scrim]; g_cp_view = scrim;
+    }
+    g_cp_count.text = @(t[CP_TEXT_COUNT]);
+    g_cp_done_btn.enabled = cp_can_confirm(state);
+}
+
+static void controller_join_start(void) {
+    g_join=[DmControllerJoin new];
+    g_join.available=^BOOL { return g_view.window && dm_ios_controller_can_join(); };
+    g_join.sample=^(int *joined,int *waiting,int *a,int *b) {
+        *joined=dm_players_reported(); *waiting=*a=*b=0;
+        BOOL merge=merge_automatic_pads();
+        for (GCController *c in GCController.controllers) if (c.extendedGamepad) {
+            *a |= c.extendedGamepad.buttonA.isPressed; *b |= c.extendedGamepad.buttonB.isPressed;
+            if (!merge && pad_slot_of(&g_routes.slots,(__bridge const void *)c)<0) (*waiting)++;
+        }
+    };
+    g_join.show=^(const ctrl_prompt *state) { cp_show(state); };
+    g_join.hide=^{ [g_cp_view removeFromSuperview]; g_cp_view=nil; g_cp_count=nil; g_cp_done_btn=nil; };
+    g_join.quiesce=^{
+        atomic_store(&g_join_blocked,1); [g_view reset]; dm_touch_set(NULL,0);
+        pthread_mutex_lock(&g_mu); g_shake_btn=0; pthread_mutex_unlock(&g_mu);
+        dm_input_quiesce();
+    };
+    g_join.resume=^{
+        atomic_store(&g_join_blocked,0);
+        if (!atomic_load(&g_configuring)) for (int p=0;p<DM_PLAYERS;p++)
+            for (GCController *c in g_sources[p]) read_pad(c.extendedGamepad);
+    };
+}
+int front_ctrl_support(int minimum,int maximum) {
+    if (!front_metal_layer() || !g_join) return -1;
+    return [g_join requestMinimum:minimum maximum:maximum];
+}
+void dm_gamepad_cancel_join(void) {
+    [g_join cancelAll]; atomic_store(&g_join_blocked,0);
+}
+
+UIView *dm_gamepad_view(CGRect frame) { DmGamepad *v = [[DmGamepad alloc] initWithFrame:frame]; g_view = v; controller_join_start(); return v; }
 void dm_gamepad_arrange(UIView *view, DmLayout layout) { [(DmGamepad *)view arrange:layout]; }
 void dm_gamepad_opmode_changed(void) { [g_view opmodeChanged]; }
 void dm_gamepad_touch_feedback(bool on) { [g_view setTouchFeedback:on]; }
 int dm_pad_layout(void) { return g_view ? [g_view padLayout] : 0; }
 bool dm_pad_layout_offered(int layout) { return layout == 0 || layout == 1 || (layout == 2 && dm_opmode() == 0); }
 void dm_pad_layout_set(int layout) { [g_view setPadLayout:layout]; }
-void dm_gamepad_active(void) { dispatch_async(dispatch_get_main_queue(), ^{ for (GCController *c in GCController.controllers) dm_motion_rearm(c); }); }   // On become active: motion_apple.h
+void dm_gamepad_active(void) { dispatch_async(dispatch_get_main_queue(), ^{ [g_join poll]; for (GCController *c in GCController.controllers) dm_motion_rearm(c); }); }   // On become active: motion_apple.h
 void dm_gamepad_reset(void) {   // On resign active: release everything (a key held while switching away and released in background gets no "release")
     dispatch_async(dispatch_get_main_queue(), ^{ [g_view reset]; });
     pthread_mutex_lock(&g_mu); g_shake_btn = 0; pthread_mutex_unlock(&g_mu); publish();
@@ -814,6 +913,7 @@ void dm_gamepad_reset(void) {   // On resign active: release everything (a key h
 // Called by the UIKit coordinator. Keep system and physical input out of the
 // game while the sheet owns the screen, including the phone's shake shortcut.
 void dm_gamepad_set_configuring(BOOL open) {
+    if (open) [g_join beginEditing];
     atomic_store(&g_configuring, open);
     dm_motion_suspend(open);
     dm_haptics_suspend(DM_HAPTICS_CONTROLLER_SETUP, open);
@@ -824,5 +924,5 @@ void dm_gamepad_set_configuring(BOOL open) {
         g_shake_btn = 0;
         pthread_mutex_unlock(&g_mu);
         dm_input_quiesce();
-    } else dm_gamepad_active();
+    } else { [g_join endEditing]; dm_gamepad_active(); }
 }

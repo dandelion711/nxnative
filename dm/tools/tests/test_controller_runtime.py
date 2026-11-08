@@ -13,12 +13,12 @@ HOST = Path(__file__).resolve().parents[3] / 'dm/host'
 class ControllerRuntimeTests(unittest.TestCase):
     def test_native_routes_and_device_swap(self):
         with tempfile.TemporaryDirectory() as tmp:
-            for name in ('controller_panel', 'controller_assignment'):
+            for name in ('controller_panel', 'controller_assignment', 'controller_join'):
                 with self.subTest(component=name):
                     exe = Path(tmp) / name
                     result = subprocess.run(['xcrun', '-sdk', 'macosx', 'clang', '-fobjc-arc', '-O1', '-Wall', '-Werror',
                                              '-Wno-unused-function', '-o', str(exe), str(HOST / f'tests/t_{name}_mac.m'),
-                                             '-framework', 'AppKit', '-framework', 'GameController'], capture_output=True, text=True, timeout=120)
+                                             '-framework', 'AppKit', '-framework', 'GameController', '-framework', 'QuartzCore'], capture_output=True, text=True, timeout=120)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

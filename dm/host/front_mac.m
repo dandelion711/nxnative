@@ -26,6 +26,8 @@
 #include "pad_hid_mac.h"
 #include "home_quit.h"
 #include "home_quit_mac.h"
+#include "controller_join_apple.h"
+#include "controller_join_mac.h"
 #include <signal.h>
 #include <math.h>
 #include <sys/stat.h>
@@ -37,6 +39,7 @@ static uint64_t g_btn;
 static int g_w, g_a, g_s, g_d;
 static int g_rl, g_ru, g_rr, g_rd;   // arrow keys pressed with Shift held: the right stick (each goes back up as it went down, whatever Shift does meanwhile)
 static int g_controller_ui_active;
+static DmControllerJoin *g_join;
 static void controller_ui_refresh(void);
 static int g_input_on = 1;   // main thread: the game window is key, so its keyboard, mouse and controllers reach the game (input_release / input_resume)
 
@@ -149,6 +152,10 @@ static int fn_shortcut(NSEvent *e) {
 static void on_key(NSEvent *e, int down) {
     if (!g_input_on) return;
     unsigned short c = e.keyCode;
+    if ([g_join blocksInput]) {
+        if (down && !g_join.editing) [g_join pollConfirm:c==36 || c==38 cancel:c==53 || c==40];
+        return;
+    }
     switch (c) { case 13: g_w = down; break; case 0: g_a = down; break; case 1: g_s = down; break; case 2: g_d = down; break; }
     // An arrow key pressed with Shift held is the right stick until it is released; without Shift, the D-pad. The keyboard had no right stick: a 3D game's camera
     // could be turned only with a controller (Donkey Kong Bananza)
@@ -180,6 +187,7 @@ static void hq_poll(void);
 static home_quit g_hq;   // the Home button's hold and quit prompt (home_quit.h): while the prompt is open the controllers' input goes to it, not to the game
 static void pad_read(GCExtendedGamepad *g) {
     if (!g_input_on) return;
+    if ([g_join poll]) return;
     hq_poll(); if (hq_blocks_input(g_hq.phase)) return;
     int role=cs_explicit ? cs_device_role(g.controller,cs_choices) : 0;
     int p = role ? cs_player(g.controller,NULL) : g_merge ? 0 : pad_slot_of(&g_slots, (__bridge const void *)g.controller); if (p < 0) return;
@@ -221,6 +229,7 @@ static int merge_pads_left(GCController *gone) {
 static BOOL controller_reapply_pairs(NSArray *now);
 static NSArray *controller_pair_devices;
 static void pads_changed(GCController *gone) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [g_join poll]; });
     NSMutableArray<GCController *> *now = [GCController.controllers mutableCopy];
     if (gone) [now removeObject:gone];
     cs_update(now);
@@ -313,12 +322,13 @@ static void input_resume(void) {
 }
 // Raw HID gamepads (pad_hid_mac.h): a player slot each, as a GameController controller, named by the device's product name
 static void hidpad_read(hid_pad *d) {
-    if (!g_input_on || hq_blocks_input(g_hq.phase)) return;
+    if (!g_input_on || [g_join poll] || hq_blocks_input(g_hq.phase)) return;
     int p = g_merge ? 0 : pad_slot_of(&g_slots, d); if (p < 0) return;
     int32_t s[4]; pad_hid_sticks(&d->st, s);
     pad_set(p, pad_hid_buttons(&d->st), s[0], s[1], s[2], s[3]);
 }
 static void hidpad_attach(hid_pad *d) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [g_join poll]; });
     if (cs_explicit) return;   // explicit choices include only devices shown in the launch window
     int p = g_merge ? 0 : pad_slot_take(&g_slots, d, d->name); char nb[16];
     if (p < 0) { LOG("controller '%s' (HID) connected: all %d players are taken, not used", d->name, DM_PLAYERS); return; }
@@ -326,7 +336,8 @@ static void hidpad_attach(hid_pad *d) {
     if (!g_merge) dm_pad_players(pad_slot_mask(&g_slots));   // merged, every controller is player 1, as pads_changed has it
     hidpad_read(d);
 }
-static void hidpad_detach(hid_pad *d) {   // d is already off g_hidpads
+static void hidpad_detach(hid_pad *d) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [g_join poll]; });   // d is already off g_hidpads
     if (g_merge) {   // as pads_changed: released when the last controller goes away
         LOG("controller '%s' (HID) disconnected", d->name);
         if (!merge_pads_left(nil)) dm_pad_set(0, 0, 0, 0, 0);
@@ -416,6 +427,7 @@ static void hq_changed(hq_phase was, hq_phase now, GCController *holder) {
     }
 }
 static void hq_poll(void) {
+    if ([g_join blocksInput]) return;
     static int busy; if (!g_hq_on || !g_win || busy || g_controller_ui_active) return;
     busy = 1;
     int home, a, b; GCController *holder = nil; hq_buttons(&home, &a, &b, &holder);
@@ -496,8 +508,51 @@ static void controller_ui_refresh(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ [g_controller_ui refresh]; });
 }
 static int controller_support(int minimum, int maximum) { return [g_controller_ui requestMinimum:minimum maximum:maximum]; }
+// Joining retains upstream's raw count and waiting-device policy. Configuration
+// temporarily hides this card; it never completes the card's guest waiter.
+static NSView *g_join_view;
+static int g_join_shown=-1, g_join_on=-1;
+static void controller_join_start(void) {
+    g_join=[DmControllerJoin new];
+    g_join.available=^BOOL { return g_layer && g_win && g_win.isVisible && !g_text_box; };
+    g_join.sample=^(int *joined,int *waiting,int *a,int *b) {
+        *joined=dm_players_reported(); *waiting=*a=*b=0;
+        for (GCController *c in GCController.controllers) if (c.extendedGamepad) {
+            *a |= c.extendedGamepad.buttonA.isPressed; *b |= c.extendedGamepad.buttonB.isPressed;
+            if (!g_merge && pad_slot_of(&g_slots,(__bridge const void *)c)<0) (*waiting)++;
+        }
+        for (hid_pad *d=g_hidpads;d;d=d->next) {
+            uint64_t m=pad_hid_buttons(&d->st); *a |= !!(m&DM_BTN_A); *b |= !!(m&DM_BTN_B);
+            if (!g_merge && pad_slot_of(&g_slots,d)<0) (*waiting)++;
+        }
+    };
+    g_join.show=^(const ctrl_prompt *state) {
+        int on=cp_can_confirm(state);
+        if (g_join_view && g_join_shown==state->joined && g_join_on==on) return;
+        GCExtendedGamepad *pad=nil;
+        for (GCController *c in GCController.controllers) if ((pad=c.extendedGamepad)) break;
+        NSView *view=controller_join_card(g_win.contentView.bounds,state,pad.buttonA.sfSymbolsName,pad.buttonB.sfSymbolsName,g_controller_ui,@selector(showForRequest:));
+        [g_join_view removeFromSuperview]; [g_win.contentView addSubview:view];
+        g_join_view=view; g_join_shown=state->joined; g_join_on=on;
+    };
+    g_join.hide=^{ [g_join_view removeFromSuperview]; g_join_view=nil; };
+    g_join.quiesce=^{
+        hq_close(); g_btn=0; g_w=g_a=g_s=g_d=0; g_rl=g_ru=g_rr=g_rd=0; push();
+        if (g_mouse_down) { g_mouse_down=0; dm_touch_set(NULL,0); }
+        pads_release(); dm_input_quiesce();
+    };
+    g_join.resume=^{ if (!g_controller_ui_active && NSApp.isActive && g_win.isKeyWindow) pads_reread(); };
+    [NSNotificationCenter.defaultCenter addObserverForName:NSWindowWillCloseNotification object:g_win queue:nil usingBlock:^(NSNotification *n) {
+        (void)n; [g_join cancelAll];
+    }];
+}
+int front_ctrl_support(int minimum,int maximum) {
+    if (!g_layer || !g_join) return -1;
+    return [g_join requestMinimum:minimum maximum:maximum];
+}
 static void controller_ui_start(NSWindow *parent, NSMenu *bar) {
     g_controller_ui = [DmControllerUI new]; g_controller_ui.parent = parent;
+    g_controller_ui.requestLimits=^(int *minimum,int *maximum) { dm_controller_setup_requirements(NULL,NULL,minimum,maximum); };
     g_controller_ui.snapshot = ^{ return controller_state(); };
     g_controller_ui.identify = ^BOOL(NSString *key) {
         cs_update(GCController.controllers);
@@ -506,8 +561,9 @@ static void controller_ui_start(NSWindow *parent, NSMenu *bar) {
     g_controller_ui.requirements = ^{ return controller_requirements(); };
     g_controller_ui.resolveChoices = ^NSArray *(NSArray *choices) { return controller_assignment_resolve(controller_host(), choices); };
     g_controller_ui.applyChoices = ^NSString *(NSArray *choices, int minimum, int maximum) { return controller_apply(choices, minimum, maximum); };
-    g_controller_ui.didOpen = ^{ g_controller_ui_active = 1; hq_close(); input_release(); dm_input_quiesce(); };
-    g_controller_ui.didClose = ^{ g_controller_ui_active = 0; if (NSApp.isActive && g_win.isKeyWindow) input_resume(); };
+    controller_join_start();
+    g_controller_ui.didOpen = ^{ [g_join beginEditing]; g_controller_ui_active = 1; hq_close(); input_release(); dm_input_quiesce(); };
+    g_controller_ui.didClose = ^{ g_controller_ui_active = 0; [g_join endEditing]; if (NSApp.isActive && g_win.isKeyWindow) input_resume(); };
     dm_controller_menu_add(bar, g_controller_ui);
     dm_controller_support_hook = controller_support;
 }
@@ -521,7 +577,7 @@ void front_picture_shape(int w, int h) { if (w > 0 && h > 0) g_picture_aspect = 
 @implementation DmGameView
 - (void)mouseDown:(NSEvent *)e { [self mouseDragged:e]; }
 - (void)mouseDragged:(NSEvent *)e {
-    if (!g_input_on) return;
+    if (!g_input_on || [g_join blocksInput]) return;
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil]; NSSize b = self.bounds.size;
     double w = b.width, h = b.height;
     if (w <= 0 || h <= 0) return;
