@@ -635,48 +635,15 @@ static NSArray<NSMutableArray<GCController *> *> *new_sources(void) {
 // Preview the routes that Apply will publish. Automatic pads keep the game's
 // legacy one-player merge, which counts as one player even with multiple pads.
 static NSDictionary *route_status(dm_ios_routes plan, NSArray<NSArray<GCController *> *> *sources, BOOL inGame) {
-    uint32_t styles = 0, ids = 0;
-    if (inGame) dm_controller_setup_requirements(&styles, &ids, NULL, NULL);
-    // Launch previews must not initialize the cached operation mode before
-    // the launcher's settings have been applied.
-    const char *mode = getenv("DM_OPMODE");
-    int operationMode = inGame ? dm_opmode() : mode ? atoi(mode) : DM_GAME_OPMODE;
-    BOOL handheld = !operationMode;
-    NSMutableDictionary *routes = [NSMutableDictionary new];
-    uint32_t ready = 0;
-    BOOL any = pad_slot_mask(&plan.slots) != 0;
-    for (int p = 0; p < DM_PLAYERS; p++) {
-        int slot = p;
-        if (p && !(ids & 0xfeu) && !(plan.manual >> p & 1) && inGame) slot = 0;
-        uint32_t style = plan.styles[slot];
-        uint32_t idBit = 1u << slot;
-        if (!style && !slot && handheld) { style = 2u; idBit = 1u << 8; }
-        if (!style) style = DM_STYLE_PRO;
-        BOOL accepted = (!plan.sides[p] || plan.sides[p]==3) && (styles & style) && ((ids & idBit) || (!slot && !plan.styles[0]));
-        for (GCController *controller in sources[p]) {
-            NSString *key = [cs_devices allKeysForObject:controller].firstObject;
-            NSString *automaticStyle = !slot && handheld ? @"handheld" : @"pro";
-            routes[key] = @{@"player": @(slot + 1), @"ready": @(accepted), @"automaticStyle": automaticStyle,
-                @"recommendation": controller_recommended_style(styles, slot) ?: @"", @"role": g_overrides[key][@"role"] ?: @"both", @"pairComplete": @(!plan.sides[p] || plan.sides[p]==3)};
-            if (accepted) ready |= 1u << slot;
-        }
-    }
-    BOOL touch = inGame && !any && (styles & (handheld ? 2u : DM_STYLE_PRO)) &&
-                 (ids & (handheld ? 1u << 8 : 1u));
-    NSMutableArray *types = [NSMutableArray new], *players = [NSMutableArray new];
-    const uint32_t externalStyles[] = {DM_STYLE_PRO, DM_STYLE_PAIR, DM_STYLE_LEFT, DM_STYLE_RIGHT};
-    for (size_t i = 0; i < sizeof externalStyles / sizeof externalStyles[0]; i++)
-        if (styles & externalStyles[i]) [types addObject:cs_style_name(externalStyles[i])];
-    for (int p = 0; p < DM_PLAYERS; p++) if (ids >> p & 1) [players addObject:@(p + 1)];
-    int minimum = 0, maximum = DM_PLAYERS;
+    dm_controller_limits limits={0,0,0,DM_PLAYERS};
     if (inGame) {
-        int gameMin=0,gameMax=DM_PLAYERS; dm_controller_setup_requirements(NULL,NULL,&gameMin,&gameMax);
-        dm_ios_controller_limits(&minimum,&maximum); minimum=MAX(minimum,gameMin); maximum=MIN(maximum,gameMax);
+        dm_controller_setup_requirements(&limits.styles,&limits.ids,&limits.minimum,&limits.maximum);
+        int minimum=0,maximum=DM_PLAYERS; dm_ios_controller_limits(&minimum,&maximum);
+        limits.minimum=MAX(limits.minimum,minimum); limits.maximum=MIN(limits.maximum,maximum);
     }
-    return @{@"minimum": @(minimum), @"maximum": @(maximum), @"styles": types, @"players": players,
-        @"requiredStyle": controller_required_style(styles) ?: @"",
-        @"recommendedStyles": styles==(DM_STYLE_LEFT|DM_STYLE_RIGHT) ? @[@"left",@"right"] : controller_required_style(styles) ? @[controller_required_style(styles)] : @[],
-        @"ready": @(__builtin_popcount(ready) + touch), @"touch": @(touch), @"routes": routes};
+    const char *mode=getenv("DM_OPMODE");
+    int operationMode=inGame ? dm_opmode() : mode ? atoi(mode) : DM_GAME_OPMODE;
+    return ios_route_status(plan,sources,g_overrides,inGame,!operationMode,limits);
 }
 
 NSDictionary<NSString *, id> *dm_ios_controller_status(NSArray<NSDictionary<NSString *, id> *> *choices, BOOL inGame) {
@@ -755,7 +722,7 @@ NSString *dm_ios_controller_apply(NSArray<NSDictionary<NSString *, id> *> *choic
     dm_pad_reconfigure_begin();
     NSDictionary *status = route_status(plan, sources, YES);
     int count = [status[@"ready"] intValue];
-    if (count < [status[@"minimum"] intValue] || count > [status[@"maximum"] intValue]) {
+    if ([status[@"minimum"] intValue]>[status[@"maximum"] intValue] || count < [status[@"minimum"] intValue]) {
         dm_pad_reconfigure_end();
         return @"Assign the number of supported controllers this game requests.";
     }
@@ -864,12 +831,18 @@ static void cp_show(const ctrl_prompt *state) {   // the card once per prompt; i
 static void controller_join_start(void) {
     g_join=[DmControllerJoin new];
     g_join.available=^BOOL { return g_view.window && dm_ios_controller_can_join(); };
-    g_join.sample=^(int *joined,int *waiting,int *a,int *b) {
-        *joined=dm_players_reported(); *waiting=*a=*b=0;
+    g_join.sample=^(int *joined,int *ready,int *waiting,int *a,int *b) {
+        dm_controller_evaluation evaluation=dm_controller_support_evaluation();
+        *joined=__builtin_popcount(evaluation.joined); *ready=evaluation.ready_count; *waiting=*a=*b=0;
         BOOL merge=merge_automatic_pads();
         for (GCController *c in GCController.controllers) if (c.extendedGamepad) {
             *a |= c.extendedGamepad.buttonA.isPressed; *b |= c.extendedGamepad.buttonB.isPressed;
-            if (!merge && pad_slot_of(&g_routes.slots,(__bridge const void *)c)<0) (*waiting)++;
+            NSString *key=[cs_devices allKeysForObject:c].firstObject;
+            NSDictionary *choice=key ? g_overrides[key] : nil;
+            int selected=choice && [choice[@"player"] intValue]!=-1 ? [choice[@"player"] intValue]-1 : -2;
+            BOOL assigned=NO;
+            for (int p=0;p<DM_PLAYERS;p++) if ([g_sources[p] containsObject:c]) assigned=YES;
+            *waiting+=dm_controller_source_waiting(assigned,selected,merge);
         }
     };
     g_join.show=^(const ctrl_prompt *state) { cp_show(state); };

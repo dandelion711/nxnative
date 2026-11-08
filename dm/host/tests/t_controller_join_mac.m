@@ -32,8 +32,9 @@ int main(void) { @autoreleasepool {
     };
     ui.didOpen=^{ [join beginEditing]; }; ui.didClose=^{ [join endEditing]; };
     join.available=^BOOL { return YES; };
-    join.sample=^(int *j,int *w,int *aa,int *bb) { *j=joined; *w=waiting; *aa=a; *bb=b; };
+    join.sample=^(int *j,int *r,int *w,int *aa,int *bb) { *j=joined; *r=joined; *w=waiting; *aa=a; *bb=b; };
     join.show=^(const ctrl_prompt *s) {
+        assert(!ui.panel && !parent.attachedSheet); // no overlapping popup and editor
         [card removeFromSuperview];
         card=controller_join_card(parent.contentView.bounds,s,nil,nil,ui,@selector(showForRequest:));
         [parent.contentView addSubview:card];
@@ -45,6 +46,9 @@ int main(void) { @autoreleasepool {
     [configure performClick:nil];
     assert(ui.panel && parent.attachedSheet==ui.panel.window && !card && join.editing);
     assert(ui.panel.minimum==2 && ui.panel.maximum==4 && ui.panel.recommend && !answers);
+    joined=2; [join pollConfirm:YES cancel:YES]; [ui refresh];
+    assert(ui.panel && !card && !answers); // hotplug/confirm cannot revive the card while editing
+    joined=1;
     [ui.panel cancel:nil];
     settle(^BOOL { return ui.panel==nil; });
     assert(card && !join.editing && join->state.phase==CP_OPEN && !answers);
@@ -55,6 +59,29 @@ int main(void) { @autoreleasepool {
     a=0; [join poll]; assert(![join blocksInput]);
     // Both manual-menu and popup access use the current pending limits.
     [ui showFromMenu:nil]; assert(ui.panel.minimum==2 && ui.panel.maximum==4);
+    [join openMinimum:3 maximum:4 completion:^(int r) { answers++; result=r; }];
+    assert(join.queue.count==1 && !card && ui.panel);
+    [ui.panel cancel:nil]; settle(^BOOL { return ui.panel==nil; });
+    assert(card && join.current && !ui.panel);
+    [join pollConfirm:NO cancel:YES]; assert(!card && answers==2 && !result);
+    [join cancelAll];
+    __block int liveMinimum=0;
+    ui.requestLimits=^(int *minimum,int *maximum) { *minimum=liveMinimum; *maximum=8; };
+    [ui showFromMenu:nil];
+    assert(ui.panel.minimum==0 && ui.panel.applyButton.enabled && !card);
+    liveMinimum=3; [ui.panel refreshRequirements];
+    assert(ui.panel.minimum==3 && !ui.panel.applyButton.enabled && !card);
+    [ui.panel cancel:nil]; settle(^BOOL { return ui.panel==nil; });
+    ui.requestLimits=nil;
+    __block int evaluated=0;
+    ui.evaluateChoices=^dm_controller_evaluation(NSArray *draft) {
+        evaluated++;
+        return controller_choices_evaluate((dm_controller_requirements){0x1f,3,DM_FALLBACK_NONE},draft);
+    };
+    [ui openMinimum:1 maximum:1 completion:nil];
+    assert(evaluated && ui.panel.evaluateChoices && ui.panel.applyButton.enabled);
+    // Two unchanged sources remain assigned while the UI accepts the SDK cap.
+    assert(ui.panel.choices.count==2 && !card);
     [ui.panel cancel:nil]; settle(^BOOL { return ui.panel==nil; });
     [join cancelAll]; [parent close];
     puts("native joining card and controller editor OK");

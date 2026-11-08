@@ -7,7 +7,7 @@ int main(void) { @autoreleasepool {
     NSMutableArray *answers=[NSMutableArray new];
     DmControllerJoin *join=[DmControllerJoin new];
     join.available=^BOOL { return available; };
-    join.sample=^(int *j,int *w,int *aa,int *bb) { *j=joined; *w=waiting; *aa=a; *bb=b; };
+    join.sample=^(int *j,int *r,int *w,int *aa,int *bb) { *j=joined; *r=joined; *w=waiting; *aa=a; *bb=b; };
     join.show=^(const ctrl_prompt *s) { assert(s->phase==CP_OPEN); shown++; };
     join.hide=^{ hidden++; }; join.quiesce=^{ cleared++; }; join.resume=^{ resumed++; };
     void (^answer)(int)=^(int r) { [answers addObject:@(r)]; };

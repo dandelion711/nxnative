@@ -30,9 +30,11 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
 @end
 
 @interface DmControllerPanel : NSWindowController <NSWindowDelegate>
+@property(copy) void (^requestLimits)(int *,int *);
 @property(copy) NSDictionary *(^snapshot)(void);
 @property(copy) BOOL (^identify)(NSString *);
 @property(copy) dm_controller_requirements (^requirements)(void);
+@property(copy) dm_controller_evaluation (^evaluateChoices)(NSArray *);
 @property(copy) NSArray *(^resolveChoices)(NSArray *);
 @property(copy) NSString *(^applyChoices)(NSArray *, int, int);
 @property int minimum, maximum;
@@ -161,9 +163,10 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
 }
 - (void)validity {
     dm_controller_requirements game = self.displayedRequirements;
-    BOOL keyboard = NO;
-    int count = controller_ready_players(game, self.resolved, &keyboard);
-    self.applyButton.enabled = count >= self.minimum && count <= self.maximum && !cs_pair_error(self.choices);
+    dm_controller_evaluation evaluation=self.evaluateChoices ? self.evaluateChoices(self.choices) : controller_choices_evaluate(game,self.resolved);
+    BOOL keyboard=evaluation.fallback!=0;
+    int count=dm_controller_capped_count(evaluation.ready_count,self.maximum);
+    self.applyButton.enabled = self.minimum<=self.maximum && count >= self.minimum && !cs_pair_error(self.choices);
     NSMutableArray *details = [NSMutableArray new];
     if (self.minimum > self.maximum) {
         [details addObject:@"The game requested conflicting player counts."];
@@ -196,10 +199,6 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
     else if (count < self.minimum) {
         status = [NSString stringWithFormat:@"%d of %d players ready", count, self.minimum];
         detail = @"Assign the required players to continue.";
-    } else if (count > self.maximum) {
-        int extra = count - self.maximum;
-        status = [NSString stringWithFormat:@"%d players ready · Too many", count];
-        detail = [NSString stringWithFormat:@"Unassign %d controller%@ to continue.", extra, extra == 1 ? @"" : @"s"];
     } else { status = [NSString stringWithFormat:@"%d player%@ ready", count, count == 1 ? @"" : @"s"]; detail = @"Changes apply to this session."; }
     if (keyboard) detail = [detail stringByAppendingString:@" Player 1’s keyboard counts."];
     self.message.stringValue = status;
@@ -207,11 +206,22 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
     self.operationError.hidden = YES;
 }
 - (void)refreshRequirements {
+    BOOL limitsChanged=NO;
+    if (self.requestLimits) {
+        int minimum=0,maximum=DM_PLAYERS; self.requestLimits(&minimum,&maximum);
+        minimum=MAX(self.minimum,minimum); maximum=MIN(self.maximum,maximum);
+        limitsChanged=minimum!=self.minimum || maximum!=self.maximum;
+        self.minimum=minimum; self.maximum=maximum;
+    }
     dm_controller_requirements now = self.requirements ? self.requirements() : (dm_controller_requirements){0};
     dm_controller_requirements shown = self.displayedRequirements;
-    if (now.styles != shown.styles || now.ids != shown.ids || now.fallback != shown.fallback) [self refresh];
+    if (limitsChanged || now.styles != shown.styles || now.ids != shown.ids || now.fallback != shown.fallback) [self refresh];
 }
 - (void)refresh {
+    if (self.requestLimits) {
+        int minimum=0,maximum=DM_PLAYERS; self.requestLimits(&minimum,&maximum);
+        self.minimum=MAX(self.minimum,minimum); self.maximum=MIN(self.maximum,maximum);
+    }
     self.displayedRequirements = self.requirements ? self.requirements() : (dm_controller_requirements){0};
     NSResponder *responder = self.window.firstResponder;
     NSString *focus = [responder isKindOfClass:NSView.class] ? [(NSView *)responder identifier] : nil;
@@ -296,9 +306,18 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
         NSString *warning = nil;
         BOOL slotSupported = assigned == 1 && [effective[@"style"] isEqual:@"handheld"]
             ? (game.ids & (1u << 8)) != 0 : controller_player_supported(game, assigned);
-        if (assigned && effective[@"pairComplete"] && ![effective[@"pairComplete"] boolValue]) warning = @"Assign both sides to complete this player’s pair.";
-        else if (assigned && !slotSupported) warning = @"Choose a player slot listed in the game requirements.";
-        else if (assigned && !(game.styles & cs_style(effective[@"style"]))) warning = @"Change “Game sees” to a type listed above.";
+        if (effective[@"ready"]) {
+            uint32_t rejected=[effective[@"rejected"] unsignedIntValue];
+            if (assigned && ![effective[@"ready"] boolValue]) {
+                if (rejected&DM_CONTROLLER_PAIR_INCOMPLETE) warning=@"Assign both sides to complete this player’s pair.";
+                else if (rejected&DM_CONTROLLER_ID) warning=@"Choose a player slot listed in the game requirements.";
+                else warning=@"Change “Game sees” to a type listed above.";
+            }
+        } else {
+            if (assigned && effective[@"pairComplete"] && ![effective[@"pairComplete"] boolValue]) warning = @"Assign both sides to complete this player’s pair.";
+            else if (assigned && !slotSupported) warning = @"Choose a player slot listed in the game requirements.";
+            else if (assigned && !(game.styles & cs_style(effective[@"style"]))) warning = @"Change “Game sees” to a type listed above.";
+        }
         NSTextField *badge = [self label:warning ? @"✕ Not ready" : assigned ? @"✓ Ready" : @"Unassigned" size:11 weight:NSFontWeightMedium];
         badge.textColor = NSColor.secondaryLabelColor;
         [badge setContentCompressionResistancePriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -420,6 +439,7 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
 @property(copy) NSDictionary *(^snapshot)(void);
 @property(copy) BOOL (^identify)(NSString *);
 @property(copy) dm_controller_requirements (^requirements)(void);
+@property(copy) dm_controller_evaluation (^evaluateChoices)(NSArray *);
 @property(copy) NSArray *(^resolveChoices)(NSArray *);
 @property(copy) NSString *(^applyChoices)(NSArray *, int, int);
 @property(copy) void (^didOpen)(void);
@@ -461,8 +481,8 @@ static NSArray<NSString *> *controller_style_labels(void) { return @[@"Automatic
     if (self.didOpen) self.didOpen();
     DmControllerPanel *panel = [DmControllerPanel new]; self.panel = panel;
     panel.resolveChoices = self.resolveChoices; panel.recommend = completion != nil;
-    panel.snapshot = self.snapshot; panel.identify = self.identify; panel.requirements = self.requirements; panel.applyChoices = self.applyChoices;
-    panel.minimum = minimum; panel.maximum = maximum; [panel refresh];
+    panel.snapshot = self.snapshot; panel.identify = self.identify; panel.requirements = self.requirements; panel.evaluateChoices=self.evaluateChoices; panel.applyChoices = self.applyChoices;
+    panel.minimum = minimum; panel.maximum = maximum; panel.requestLimits=self.requestLimits; [panel refresh];
     __weak DmControllerPanel *weakPanel = panel;
     panel.requirementsTimer = [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *timer) {
         (void)timer;

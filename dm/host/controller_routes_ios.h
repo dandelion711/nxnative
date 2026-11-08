@@ -85,3 +85,44 @@ static dm_ios_routes ios_plan_routes(pad_slots previous, NSArray *rows, NSDictio
                                      NSArray<NSMutableArray<GCController *> *> *sources) {
     return ios_plan_routes_reserved(previous, rows, choices, merge, sources, 0);
 }
+
+static dm_controller_routes ios_plan_snapshot(dm_ios_routes plan,BOOL handheld) {
+    dm_controller_routes snapshot={.occupied=pad_slot_mask(&plan.slots),.manual=plan.manual,
+        .handheld=handheld,.fallback=dm_controller_ios_fallback(pad_slot_mask(&plan.slots),plan.manual)};
+    for (int p=0;p<DM_PLAYERS;p++) {
+        snapshot.styles[p]=plan.styles[p]; snapshot.sides[p]=plan.sides[p];
+        if (plan.sides[p]) snapshot.grouped|=1u<<p;
+    }
+    return snapshot;
+}
+
+static NSDictionary *ios_route_status(dm_ios_routes plan,NSArray *sources,NSDictionary *overrides,
+        BOOL inGame,BOOL handheld,dm_controller_limits limits) {
+    uint32_t styles=limits.styles,ids=limits.ids;
+    NSMutableDictionary *routes=[NSMutableDictionary new];
+    dm_controller_routes snapshot=ios_plan_snapshot(plan,handheld);
+    dm_controller_evaluation evaluation=dm_controller_evaluate(snapshot,limits);
+    BOOL complete=YES;
+    for (int p=0;p<DM_PLAYERS;p++) if (evaluation.rejected[p]&DM_CONTROLLER_PAIR_INCOMPLETE) complete=NO;
+    BOOL any = pad_slot_mask(&plan.slots) != 0;
+    for (int p = 0; p < DM_PLAYERS; p++) {
+        int slot=inGame ? dm_controller_input_player(snapshot,limits,p) : p;
+        BOOL accepted=(evaluation.ready>>slot&1u)!=0;
+        for (GCController *controller in sources[p]) {
+            NSString *key = [cs_devices allKeysForObject:controller].firstObject;
+            NSString *automaticStyle = !slot && handheld ? @"handheld" : @"pro";
+            routes[key] = @{@"player": @(slot + 1), @"ready": @(accepted), @"automaticStyle": automaticStyle,
+                @"recommendation": controller_recommended_style(styles, slot) ?: @"", @"role": overrides[key][@"role"] ?: @"both", @"pairComplete": @(!plan.sides[p] || plan.sides[p]==3)};
+        }
+    }
+    BOOL touch=inGame && !any && evaluation.fallback!=0;
+    NSMutableArray *types = [NSMutableArray new], *players = [NSMutableArray new];
+    const uint32_t externalStyles[] = {DM_STYLE_PRO, DM_STYLE_PAIR, DM_STYLE_LEFT, DM_STYLE_RIGHT};
+    for (size_t i = 0; i < sizeof externalStyles / sizeof externalStyles[0]; i++)
+        if (styles & externalStyles[i]) [types addObject:cs_style_name(externalStyles[i])];
+    for (int p = 0; p < DM_PLAYERS; p++) if (ids >> p & 1) [players addObject:@(p + 1)];
+    return @{@"minimum": @(limits.minimum), @"maximum": @(limits.maximum), @"styles": types, @"players": players,
+        @"requiredStyle": controller_required_style(styles) ?: @"",
+        @"recommendedStyles": styles==(DM_STYLE_LEFT|DM_STYLE_RIGHT) ? @[@"left",@"right"] : controller_required_style(styles) ? @[controller_required_style(styles)] : @[],
+        @"ready": @(evaluation.result_count), @"complete": @(complete), @"touch": @(touch), @"fallback": @(inGame && !touch && evaluation.fallback!=0), @"routes": routes};
+}

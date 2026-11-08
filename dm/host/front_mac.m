@@ -515,25 +515,28 @@ static int g_join_shown=-1, g_join_on=-1;
 static void controller_join_start(void) {
     g_join=[DmControllerJoin new];
     g_join.available=^BOOL { return g_layer && g_win && g_win.isVisible && !g_text_box; };
-    g_join.sample=^(int *joined,int *waiting,int *a,int *b) {
-        *joined=dm_players_reported(); *waiting=*a=*b=0;
+    g_join.sample=^(int *joined,int *ready,int *waiting,int *a,int *b) {
+        dm_controller_evaluation evaluation=dm_controller_support_evaluation();
+        *joined=__builtin_popcount(evaluation.joined); *ready=evaluation.ready_count; *waiting=*a=*b=0;
         for (GCController *c in GCController.controllers) if (c.extendedGamepad) {
             *a |= c.extendedGamepad.buttonA.isPressed; *b |= c.extendedGamepad.buttonB.isPressed;
-            if (!g_merge && pad_slot_of(&g_slots,(__bridge const void *)c)<0) (*waiting)++;
+            int chosen=cs_explicit ? cs_player(c,NULL) : -2;
+            int assigned=pad_slot_of(&g_slots,(__bridge const void *)c)>=0 || chosen>=0;
+            *waiting+=dm_controller_source_waiting(assigned,chosen,g_merge);
         }
         for (hid_pad *d=g_hidpads;d;d=d->next) {
             uint64_t m=pad_hid_buttons(&d->st); *a |= !!(m&DM_BTN_A); *b |= !!(m&DM_BTN_B);
-            if (!g_merge && pad_slot_of(&g_slots,d)<0) (*waiting)++;
+            *waiting+=dm_controller_source_waiting(pad_slot_of(&g_slots,d)>=0,cs_explicit ? -1 : -2,g_merge);
         }
     };
     g_join.show=^(const ctrl_prompt *state) {
         int on=cp_can_confirm(state);
-        if (g_join_view && g_join_shown==state->joined && g_join_on==on) return;
+        if (g_join_view && g_join_shown==state->ready && g_join_on==on) return;
         GCExtendedGamepad *pad=nil;
         for (GCController *c in GCController.controllers) if ((pad=c.extendedGamepad)) break;
         NSView *view=controller_join_card(g_win.contentView.bounds,state,pad.buttonA.sfSymbolsName,pad.buttonB.sfSymbolsName,g_controller_ui,@selector(showForRequest:));
         [g_join_view removeFromSuperview]; [g_win.contentView addSubview:view];
-        g_join_view=view; g_join_shown=state->joined; g_join_on=on;
+        g_join_view=view; g_join_shown=state->ready; g_join_on=on;
     };
     g_join.hide=^{ [g_join_view removeFromSuperview]; g_join_view=nil; };
     g_join.quiesce=^{
@@ -559,6 +562,7 @@ static void controller_ui_start(NSWindow *parent, NSMenu *bar) {
         return cs_identify(key, dm_haptics_apple_identify);
     };
     g_controller_ui.requirements = ^{ return controller_requirements(); };
+    g_controller_ui.evaluateChoices=^dm_controller_evaluation(NSArray *choices) { return controller_assignment_evaluate(controller_host(),choices); };
     g_controller_ui.resolveChoices = ^NSArray *(NSArray *choices) { return controller_assignment_resolve(controller_host(), choices); };
     g_controller_ui.applyChoices = ^NSString *(NSArray *choices, int minimum, int maximum) { return controller_apply(choices, minimum, maximum); };
     controller_join_start();

@@ -400,3 +400,5 @@ $(B)/t_controller_join_apple: t_controller_join_apple.m ../controller_join_apple
 
 $(B)/t_controller_join_mac: t_controller_join_mac.m ../controller_join_mac.h ../controller_join_apple.h ../ctrl_prompt.h ../controller_panel_mac.h ../home_quit_mac.h | $(B)
 	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -fobjc-arc -o $@ $< -framework AppKit -framework QuartzCore
+
+$(B)/t_hid $(B)/t_hid_tsan $(B)/t_controller_assignment_mac $(B)/t_controller_panel_mac $(B)/t_controller_join_mac $(B)/t_controller_setup_mac: ../controller_readiness.h ../controller_routes_ios.h ../controller_requirements_apple.h

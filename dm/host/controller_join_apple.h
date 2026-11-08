@@ -14,7 +14,7 @@
 @public ctrl_prompt state;
 }
 @property (copy) BOOL (^available)(void);
-@property (copy) void (^sample)(int *joined, int *waiting, int *a, int *b);
+@property (copy) void (^sample)(int *joined, int *ready, int *waiting, int *a, int *b);
 @property (copy) void (^show)(const ctrl_prompt *);
 @property (copy) void (^hide)(void);
 @property (copy) void (^quiesce)(void);
@@ -55,8 +55,8 @@
     self.current = request;
     [self watchInput];
     self.quiesce();
-    int joined, waiting, a, b; self.sample(&joined, &waiting, &a, &b);
-    cp_open(&state, request.minimum, request.maximum, joined, a, b);
+    int joined, ready, waiting, a, b; self.sample(&joined, &ready, &waiting, &a, &b);
+    cp_open_ready(&state, request.minimum, request.maximum, joined, ready, a, b);
     self.show(&state);
     [self poll];
 }
@@ -83,15 +83,15 @@
 - (BOOL)pollConfirm:(BOOL)confirm cancel:(BOOL)cancel {
     if (self.editing) return YES;
     if (state.phase == CP_IDLE) return NO;
-    int joined, waiting, a, b; self.sample(&joined, &waiting, &a, &b);
+    int joined, ready, waiting, a, b; self.sample(&joined, &ready, &waiting, &a, &b);
     cp_phase was = state.phase;
-    cp_step(&state, joined, waiting, a, b, confirm, cancel);
+    cp_step_ready(&state, joined, ready, waiting, a, b, confirm, cancel);
     if (was == CP_OPEN && state.phase == CP_OPEN) self.show(&state);
     if (was == CP_OPEN && state.phase == CP_SETTLE) {
         self.hide();
         DmJoinRequest *request = self.current; self.current = nil;
         request.completion(state.ok);
-        cp_step(&state, joined, 0, a, b, 0, 0);
+        cp_step_ready(&state, joined, ready, 0, a, b, 0, 0);
     }
     if (state.phase == CP_IDLE) {
         [self.releaseTimer invalidate]; self.releaseTimer=nil;
@@ -110,8 +110,8 @@
     if (state.phase == CP_OPEN) {
         // Re-arm from the controls as they are after Apply/Cancel. A press made
         // in the editor must not become a fresh confirm/cancel on the card.
-        int joined, waiting, a, b; self.sample(&joined, &waiting, &a, &b);
-        cp_open(&state, state.min, state.max, joined, a, b);
+        int joined, ready, waiting, a, b; self.sample(&joined, &ready, &waiting, &a, &b);
+        cp_open_ready(&state, state.min, state.max, joined, ready, a, b);
         self.show(&state);
     } else if (state.phase == CP_IDLE) {
         // Direct editor requests need the same release protection as Done on

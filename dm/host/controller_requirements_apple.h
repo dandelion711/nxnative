@@ -2,6 +2,7 @@
 #pragma once
 #import <Foundation/Foundation.h>
 #include "dm_input.h"
+#include "controller_readiness.h"
 
 typedef enum {
     DM_FALLBACK_NONE, DM_FALLBACK_IF_PLAYER_ONE_FREE
@@ -25,22 +26,23 @@ static inline BOOL controller_player_supported(dm_controller_requirements game, 
     return player > 0 && player <= DM_PLAYERS && (game.ids & (1u << (player - 1)));
 }
 
-static inline int controller_ready_players(dm_controller_requirements game, NSArray *choices, BOOL *fallbackCounts) {
-    int count = 0; uint32_t counted = 0;
-    BOOL firstAssigned = NO;
+static inline dm_controller_evaluation controller_choices_evaluate(dm_controller_requirements game, NSArray *choices) {
+    dm_controller_routes routes={.explicit_routes=1,.fallback=game.fallback==DM_FALLBACK_IF_PLAYER_ONE_FREE,
+        .handheld=!(game.styles&DM_STYLE_PRO) && (game.styles&2u)};
     for (NSDictionary *choice in choices) {
-        int player = [choice[@"player"] intValue];
-        if (player == 1) firstAssigned = YES;
-        if (choice[@"pairComplete"] && ![choice[@"pairComplete"] boolValue]) continue;
-        BOOL slotSupported = player == 1 && [choice[@"style"] isEqual:@"handheld"]
-            ? (game.ids & (1u << 8)) != 0 : controller_player_supported(game, player);
-        if (slotSupported && (game.styles & cs_style(choice[@"style"])) && !(counted >> (player - 1) & 1)) {
-            counted |= 1u << (player - 1); count++;
+        int p=[choice[@"player"] intValue]-1;
+        if (p<0 || p>=DM_PLAYERS) continue;
+        routes.occupied|=1u<<p; routes.styles[p]=cs_style(choice[@"style"]);
+        if (choice[@"pairComplete"]) {
+            routes.grouped|=1u<<p; routes.sides[p]=[choice[@"pairComplete"] boolValue] ? 3 : 1;
         }
     }
-    BOOL fallback = game.fallback == DM_FALLBACK_IF_PLAYER_ONE_FREE && !firstAssigned;
-    if (fallbackCounts) *fallbackCounts = fallback;
-    return count + fallback;
+    return dm_controller_evaluate(routes,(dm_controller_limits){game.styles,game.ids,0,DM_PLAYERS});
+}
+static inline int controller_ready_players(dm_controller_requirements game, NSArray *choices, BOOL *fallbackCounts) {
+    dm_controller_evaluation evaluation=controller_choices_evaluate(game,choices);
+    if (fallbackCounts) *fallbackCounts=evaluation.fallback!=0;
+    return evaluation.ready_count;
 }
 
 // A recommendation only changes the draft. Prefer full controllers when

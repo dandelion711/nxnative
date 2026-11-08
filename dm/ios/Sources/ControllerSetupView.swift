@@ -56,6 +56,8 @@ struct ControllerSetupView: View {
         let players: [Int]
         let ready: Int
         let touch: Bool
+        let fallback: Bool
+        let complete: Bool
         let routes: [String: Route]
 
         init(_ status: [String: Any]) {
@@ -67,6 +69,8 @@ struct ControllerSetupView: View {
             players = status["players"] as? [Int] ?? []
             ready = status["ready"] as? Int ?? 0
             touch = status["touch"] as? Bool ?? false
+            fallback = status["fallback"] as? Bool ?? false
+            complete = status["complete"] as? Bool ?? true
             routes = (status["routes"] as? [String: [String: Any]] ?? [:]).mapValues {
                 Route(player: $0["player"] as? Int ?? 0, ready: $0["ready"] as? Bool ?? false,
                       automaticStyle: $0["automaticStyle"] as? String ?? "pro",
@@ -74,7 +78,7 @@ struct ControllerSetupView: View {
             }
         }
 
-        var canApply: Bool { (minimum <= ready) && (ready <= maximum) }
+        var canApply: Bool { complete && (minimum <= ready) && (ready <= maximum) }
 
         var playerCount: String {
             if minimum > maximum { return String(localized: "The game requested conflicting player counts.") }
@@ -232,14 +236,16 @@ struct ControllerSetupView: View {
                 Text("Assign the required players to continue.").font(.footnote)
             } else {
                 Text(status.ready == 1 ? "1 player ready" : "\(status.ready) players ready").font(.headline)
-                if status.ready > status.maximum {
-                    Text("Unassign \(status.ready - status.maximum) to continue.").font(.footnote)
-                } else {
+                if status.complete {
                     Text("Changes apply to this session.").font(.footnote)
+                } else {
+                    Text("Complete each Joy-Con pair to continue.").font(.footnote)
                 }
             }
             if status.touch {
                 Text("Touch controls count as Player 1.").font(.footnote)
+            } else if status.fallback {
+                Text("Player 1’s default input also counts.").font(.footnote)
             }
         }
         .accessibilityElement(children: .combine)

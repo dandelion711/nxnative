@@ -32,6 +32,14 @@ static int requestMin, requestMax=DM_PLAYERS;
 static int depth, published, samples[DM_PLAYERS], keepCalls, readCalls;
 static GCController *routed[DM_PLAYERS];
 static uint32_t grouped_sides[DM_PLAYERS];
+dm_controller_routes dm_controller_current_routes(void) {
+    dm_controller_routes routes={.occupied=connected,.fallback=1,.explicit_routes=cs_explicit};
+    for (int p=0;p<DM_PLAYERS;p++) {
+        routes.styles[p]=configured[p]; routes.sides[p]=grouped_sides[p];
+        if (grouped_sides[p]) routes.grouped|=1u<<p;
+    }
+    return routes;
+}
 static int side_samples[DM_PLAYERS][2];
 static GCController *group_outputs[DM_PLAYERS][2];
 static NSMutableArray *routing;
@@ -233,7 +241,8 @@ int main(void) { @autoreleasepool {
     requestMin=4;
     assert(controller_assignment_apply(host, swapped, 1, 8, &affected) && !depth && published==before && !routing.count);
     requestMin=0; requestMax=2;
-    assert(controller_assignment_apply(host, swapped, 1, 8, &affected) && !depth && published==before && !routing.count);
+    assert(!controller_assignment_apply(host, swapped, 1, 8, &affected) && !depth && !affected && !routing.count && connected==7);
+    before=published; // maximum caps the applet result without disconnecting excess sources
     requestMax=DM_PLAYERS;
     supported = DM_STYLE_PAIR; assert(controller_assignment_apply(host, swapped, 1, 8, &affected) && published == before); supported = 0x1f;
     devices = @[a, c]; assert(controller_assignment_apply(host, swapped, 1, 8, &affected) && published == before && !routing.count);
@@ -266,6 +275,55 @@ int main(void) { @autoreleasepool {
     NSArray *plain=@[@{@"id":pairA,@"player":@1,@"style":@"pro"}];
     assert(!controller_assignment_apply(host,plain,1,8,NULL) && !grouped_sides[0]);
     devices=@[]; assert(!controller_assignment_apply(host,@[],0,8,NULL));
+    // Reserved backend players count even though the sheet cannot edit them.
+    static const char rawHID=0;
+    devices=@[a]; cs_choices=@{}; cs_explicit=0; merge=own=0;
+    memset(&slots,0,sizeof slots); memset(held,0,sizeof held); memset(configured,0,sizeof configured); memset(grouped_sides,0,sizeof grouped_sides);
+    slots.owner[0]=(__bridge const void *)a; held[0]=(id)a; slots.owner[1]=&rawHID;
+    connected=3; supported=0x1f; supportedIDs=3; requestMin=2; requestMax=2;
+    NSArray *rawRows=cs_update((id)devices);
+    NSArray *rawChoices=@[@{@"id":rawRows[0][@"id"],@"player":@(-1),@"style":@"auto"}];
+    assert(controller_assignment_evaluate(host,rawChoices).result_count==2);
+    assert(!controller_assignment_apply(host,rawChoices,2,2,NULL) && slots.owner[1]==&rawHID);
+    configured[1]=DM_STYLE_PAIR; grouped_sides[1]=1;
+    assert(controller_assignment_evaluate(host,rawChoices).result_count==1);
+    grouped_sides[1]=3;
+    assert(controller_assignment_evaluate(host,rawChoices).result_count==2);
+    NSArray *editedRaw=@[@{@"id":rawRows[0][@"id"],@"player":@1,@"style":@"left"}];
+    assert(!controller_assignment_apply(host,editedRaw,2,2,NULL));
+    assert(slots.owner[1]==&rawHID && configured[1]==DM_STYLE_PAIR && grouped_sides[1]==3);
+    requestMin=0; requestMax=8;
+
+    // Exercise the same Foundation status adapter that UIKit uses, including
+    // fallback accounting without making the hidden touch pad a new player.
+    NSArray *statusRows=cs_update((id)@[a,b]);
+    NSString *statusA=statusRows[0][@"id"],*statusB=statusRows[1][@"id"];
+    NSArray *statusSources=ios_sources(); [statusSources[1] addObject:a];
+    dm_ios_routes statusPlan={0}; statusPlan.slots.owner[1]=(__bridge const void *)a;
+    NSDictionary *status=ios_route_status(statusPlan,statusSources,@{},YES,NO,(dm_controller_limits){0x1f,3,2,4});
+    assert([status[@"ready"] intValue]==2 && [status[@"fallback"] boolValue] && ![status[@"touch"] boolValue]);
+    statusPlan.manual=2; statusPlan.styles[1]=DM_STYLE_LEFT;
+    status=ios_route_status(statusPlan,statusSources,@{},YES,NO,(dm_controller_limits){0x1f,3,2,4});
+    assert([status[@"ready"] intValue]==1 && ![status[@"fallback"] boolValue]);
+    statusSources=ios_sources(); [statusSources[0] addObject:a]; [statusSources[0] addObject:b];
+    statusPlan=(dm_ios_routes){0}; statusPlan.slots.owner[0]=(__bridge const void *)a;
+    statusPlan.styles[0]=DM_STYLE_PAIR; statusPlan.manual=1; statusPlan.sides[0]=1;
+    status=ios_route_status(statusPlan,statusSources,@{},YES,NO,(dm_controller_limits){0x1f,3,1,4});
+    assert(![status[@"complete"] boolValue]);
+    assert(![status[@"ready"] intValue] && ![status[@"routes"][statusA][@"ready"] boolValue] && ![status[@"routes"][statusB][@"ready"] boolValue]);
+    status=ios_route_status(statusPlan,statusSources,@{},YES,NO,(dm_controller_limits){0x1f,3,0,4});
+    assert(![status[@"ready"] intValue] && ![status[@"complete"] boolValue]);
+    statusPlan.sides[0]=3;
+    status=ios_route_status(statusPlan,statusSources,@{},YES,NO,(dm_controller_limits){0x1f,3,1,4});
+    assert([status[@"complete"] boolValue]);
+    assert([status[@"ready"] intValue]==1 && [status[@"routes"][statusA][@"ready"] boolValue] && [status[@"routes"][statusB][@"ready"] boolValue]);
+    status=ios_route_status(statusPlan,statusSources,@{},YES,NO,(dm_controller_limits){DM_STYLE_PRO,3,1,4});
+    assert(![status[@"ready"] intValue]); // forbidden pair/type is not ready
+    statusPlan=(dm_ios_routes){0}; statusPlan.slots.owner[0]=(__bridge const void *)a; statusPlan.slots.owner[1]=(__bridge const void *)b;
+    statusSources=ios_sources(); [statusSources[0] addObject:a]; [statusSources[1] addObject:b];
+    status=ios_route_status(statusPlan,statusSources,@{},YES,NO,(dm_controller_limits){0x1f,3,1,1});
+    assert([status[@"ready"] intValue]==1 && pad_slot_mask(&statusPlan.slots)==3);
+    puts("shared readiness: reserved HID, fallback, pair completeness, type constraints and result caps OK");
     test_ios_routes(a, b, c);
     test_ios_automatic_compatibility();
     return 0;

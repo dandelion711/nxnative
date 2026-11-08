@@ -17,6 +17,7 @@
 #include <math.h>
 #include "motion_fusion.h"
 #include "pad_style.h"
+#include "controller_readiness.h"
 
 // Recursive because style/sensor/vibration helpers call one another. The UI holds this
 // only during Apply, never while waiting for a player to use the sheet.
@@ -307,6 +308,7 @@ uint32_t hle_hid_connected_npad(void) { return connected_id(); }   // nfp's NFC 
 uint32_t dm_player_npad(int p) { HID_GUARD; return p <= 0 ? connected_id() : (uint32_t)p; }
 // The players with a controller (bit p = player p + 1, from the front end's dm_pad_players; player 1 always) and the npads the game supports (bit id for No1..No8, bit 8
 // Handheld, bit 9 Other: all of them until SetSupportedNpadIdType, as the hid service starts)
+static uint32_t g_route_players; // published owners before legacy Player 1 fallback
 static _Atomic uint32_t g_players = 1, g_ids_supported = 0x3ff;
 // Legacy automatic routing can report the default Player 1 even without a physical pad.
 static int g_player_one_fallback = 1;
@@ -412,6 +414,7 @@ static void note_merged(void) {   // logs the players whose npad the game does n
     }
 }
 static void pad_players(uint32_t mask, uint32_t manual, int fallback) { HID_GUARD;
+    g_route_players=mask & ((1u<<DM_PLAYERS)-1);
     int was_first = reported(0);
     g_player_one_fallback = fallback;
     g_manual_players = manual;
@@ -432,7 +435,7 @@ void dm_pad_players_ios(uint32_t mask, uint32_t manual) {
     // Preserve the legacy route for touch-only play and automatic pads,
     // which can still feed Player 1 in a one-player game. A lone manual
     // assignment to another slot must not add a hidden player.
-    pad_players(mask, manual, !manual || (mask & ~manual) || (mask & 1u));
+    pad_players(mask, manual, dm_controller_ios_fallback(mask,manual));
 }
 
 uint32_t dm_pad_configured_style(int player) {
@@ -705,19 +708,21 @@ typedef struct controller_request {
 } controller_request;
 static controller_request *g_controller_requests; // protected by the HID barrier
 // Keep upstream's joining count separate from configured-style readiness. Their
-// reconciliation is a follow-up, not a change to the established popup trigger.
+// readiness is evaluated separately; this retains the established popup trigger.
 int dm_players_reported(void) { HID_GUARD; int n=0; for (int p=0;p<DM_PLAYERS;p++) n+=reported(p); return n; }
-// The existing final-result calculation, reused only to avoid opening an editor
-// for an already valid setup. This does not replace joining or UI preview counts.
-static int controller_support_count(const controller_request *request, uint32_t *selected_id) { HID_GUARD;
-    int count=0; uint32_t selected=connected_id();
+dm_controller_routes dm_controller_current_routes(void) { HID_GUARD;
+    dm_controller_routes routes={.occupied=g_route_players,.manual=g_manual_players,
+        .handheld=dm_opmode()==0,.explicit_routes=atomic_load(&g_explicit_players),.fallback=g_player_one_fallback};
     for (int p=0;p<DM_PLAYERS;p++) {
-        uint32_t style=style_of(dm_player_npad(p));
-        if (!style || (!request->permit_pair && style==STYLE_JOYDUAL)) continue;
-        if (!count) selected=dm_player_npad(p); count++;
+        routes.styles[p]=atomic_load(&g_player_style[p]); routes.sides[p]=atomic_load(&g_pair_sides[p]);
+        if (atomic_load(&g_pair_grouped[p])) routes.grouped|=1u<<p;
     }
-    if (selected_id) *selected_id=selected;
-    return count;
+    return routes;
+}
+static dm_controller_evaluation controller_request_evaluation(const controller_request *request) { HID_GUARD;
+    return dm_controller_evaluate(dm_controller_current_routes(),
+        dm_controller_request_limits(atomic_load(&g_styles_supported),atomic_load(&g_ids_supported),
+            request->minimum,request->maximum,request->single,request->permit_pair));
 }
 void dm_controller_setup_requirements(uint32_t *styles, uint32_t *ids, int *minimum, int *maximum) { HID_GUARD;
     uint32_t allowed=atomic_load(&g_styles_supported); int low=0, high=DM_PLAYERS;
@@ -729,12 +734,20 @@ void dm_controller_setup_requirements(uint32_t *styles, uint32_t *ids, int *mini
     if (styles) *styles=allowed; if (ids) *ids=atomic_load(&g_ids_supported);
     if (minimum) *minimum=low; if (maximum) *maximum=high;
 }
+dm_controller_evaluation dm_controller_support_evaluation(void) { HID_GUARD;
+    dm_controller_limits limits;
+    dm_controller_setup_requirements(&limits.styles,&limits.ids,&limits.minimum,&limits.maximum);
+    return dm_controller_evaluate(dm_controller_current_routes(),limits);
+}
+// A game request owns exactly one presentation route. Do not hold the HID lock
+// while waiting for this mutex or while its frontend waits for the player.
+static pthread_mutex_t g_controller_support_lock=PTHREAD_MUTEX_INITIALIZER;
 static Result ctrl_support(int32_t *info, const int8_t *arg) {
+    pthread_mutex_lock(&g_controller_support_lock);
     controller_request request={.minimum=arg ? arg[0] : 1,.maximum=arg && arg[1]>0 ? arg[1] : DM_PLAYERS,
         .permit_pair=!arg || arg[4]!=0,.single=arg && arg[5]!=0};
-    if (request.minimum<0) request.minimum=0; if (request.minimum>DM_PLAYERS) request.minimum=DM_PLAYERS;
-    if (request.maximum>DM_PLAYERS) request.maximum=DM_PLAYERS;
-    if (request.single) request.minimum=request.maximum=1;
+    dm_controller_limits normalized=dm_controller_request_limits(0,0,request.minimum,request.maximum,request.single,request.permit_pair);
+    request.minimum=normalized.minimum; request.maximum=normalized.maximum;
     { HID_GUARD; request.next=g_controller_requests; g_controller_requests=&request; }
     // Keep the guest outside the HID barrier while its native sheet is open.
     const char *keys=getenv("DM_KEYS"), *ctl=getenv("DM_CTL");
@@ -742,22 +755,26 @@ static Result ctrl_support(int32_t *info, const int8_t *arg) {
     int answer=-1;
     if (!((keys && *keys) || (ctl && *ctl))) {
         // The upstream popup always has priority in precisely the cases where
-        // upstream invokes it. Do not reinterpret its raw limits/count here.
-        if (joining) answer=front_ctrl_support(arg[0],arg[1]);
-        else if (dm_controller_support_hook && controller_support_count(&request,NULL)<request.minimum)
+        // upstream invokes it. Only its confirmation uses effective limits and readiness.
+        if (joining) answer=front_ctrl_support(request.minimum,request.maximum);
+        else if (dm_controller_support_hook && controller_request_evaluation(&request).result_count<request.minimum)
             answer=dm_controller_support_hook(request.minimum,request.maximum);
     }
-    HID_GUARD;
-    controller_request **link=&g_controller_requests;
-    while (*link && *link!=&request) link=&(*link)->next;
-    if (*link) *link=request.next;
-    uint32_t selected;
-    int count=controller_support_count(&request,&selected);
-    int canceled=answer==0 || (joining && answer<0) || count<request.minimum;
-    LOG("hid controller applet: requested %d to %d, effective %d to %d players, single=%u, pair=%u, %d connected%s",arg ? arg[0] : 1,arg ? arg[1] : DM_PLAYERS,request.minimum,request.maximum,request.single,request.permit_pair,count,canceled ? ": canceled" : "");
-    if (count>request.maximum) count=request.maximum;
-    if (info) { info[0]=count; info[1]=(int32_t)selected; }
-    return canceled ? RES_CTRL_CANCELED : RES_OK;
+    Result result;
+    {
+        HID_GUARD;
+        controller_request **link=&g_controller_requests;
+        while (*link && *link!=&request) link=&(*link)->next;
+        if (*link) *link=request.next;
+        dm_controller_evaluation evaluation=controller_request_evaluation(&request);
+        uint32_t selected=evaluation.selected_id; int count=evaluation.result_count;
+        int canceled=answer==0 || count<request.minimum;
+        LOG("hid controller applet: requested %d to %d, effective %d to %d players, single=%u, pair=%u, %d connected%s",arg ? arg[0] : 1,arg ? arg[1] : DM_PLAYERS,request.minimum,request.maximum,request.single,request.permit_pair,count,canceled ? ": canceled" : "");
+        if (info) { info[0]=count; info[1]=(int32_t)selected; }
+        result=canceled ? RES_CTRL_CANCELED : RES_OK;
+    }
+    pthread_mutex_unlock(&g_controller_support_lock);
+    return result;
 }
 HLE_FORCE("_ZN2nn3hid21ShowControllerSupportEPNS0_27ControllerSupportResultInfoERKNS0_20ControllerSupportArgE", "controller applet: native configuration or existing-player fallback",
           Result, h_hid_ShowCtrl, int32_t *info, const int8_t *arg) {

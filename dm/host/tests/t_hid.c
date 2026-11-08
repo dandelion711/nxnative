@@ -15,8 +15,10 @@ void dm_oe_execute(int index, const void *param, size_t n) { (void)index; (void)
 void front_web_shot(const char *path) { (void)path; }
 static int prompt_calls, prompt_min, prompt_max, prompt_answer=-1;
 static uint32_t prompt_join;
+static int (*prompt_callback)(int,int);
 int front_ctrl_support(int minimum,int maximum) {
     prompt_calls++; prompt_min=minimum; prompt_max=maximum;
+    if (prompt_callback) return prompt_callback(minimum,maximum);
     if (prompt_join) dm_pad_players(prompt_join);
     return prompt_answer;
 }
@@ -57,7 +59,7 @@ void dm_ctl_cvar_i32(uint64_t off, int32_t v) { (void)off; (void)v; }
 void dm_ctl_cvar_f32(uint64_t off, float v) { (void)off; (void)v; }
 void dm_gfx_texdump_next(const char *path) { (void)path; }
 void dm_gfx_passdump_next(long n) { (void)n; }
-static int applet_depth, applet_opens, applet_closes_at_depth0;   // hle_oe.c: the applet stand-ins open and close their applet around the answer
+static _Atomic int applet_depth, applet_opens, applet_closes_at_depth0;   // hle_oe.c: the applet stand-ins open and close their applet around the answer
 void dm_applet_enter(const char *name) { (void)name; applet_depth++; applet_opens++; }
 void dm_applet_leave(void) { applet_closes_at_depth0 += --applet_depth == 0; }
 
@@ -835,9 +837,91 @@ static void t_support_priority(void) {
     // Preserve the raw joining trigger, even where effective single-mode
     // requirements differ. This discrepancy is documented, not fixed here.
     dm_pad_players(1); arg[5]=1;
-    CHECK(h_hid_ShowCtrl(info,arg)==RES_CTRL_CANCELED && prompt_calls==4 && prompt_min==2 && prompt_max==4 && fallback_calls==1,"single-mode normalization does not silently rewrite upstream popup policy");
+    CHECK(h_hid_ShowCtrl(info,arg)==RES_OK && prompt_calls==4 && prompt_min==1 && prompt_max==1 && fallback_calls==1,"upstream popup priority keeps the effective single-player limits");
     dm_controller_support_hook=NULL; prompt_answer=-1; prompt_join=0;
     dm_pad_style(0,0,0); dm_pad_style(1,0,0); dm_pad_players(1); h_hid_SetStyles(0xffffffffu);
+}
+
+// Compare the new evaluator with the existing live HID rules, not a second
+// copy of the evaluator. No input or assignment implementation is replaced.
+static void t_readiness_differential(void) {
+    const uint32_t masks[]={0,1,2,3,5,255}, manuals[]={0,1,2};
+    const uint32_t idsSet[]={0,1,2,3,256,1023}, stylesSet[]={0,1,4,24,31};
+    for (int mode=0;mode<2;mode++) for (int explicit=0;explicit<2;explicit++)
+    for (unsigned m=0;m<6;m++) for (unsigned n=0;n<3;n++) for (int pattern=0;pattern<3;pattern++)
+    for (unsigned i=0;i<6;i++) for (unsigned j=0;j<5;j++) {
+        g_mode=mode; dm_pad_explicit(explicit);
+        for (int p=0;p<DM_PLAYERS;p++) { dm_pad_style(p,0,0); dm_pad_pair_sources(p,0,0); }
+        if (pattern==1) { dm_pad_style(0,DM_STYLE_LEFT,0); dm_pad_style(1,DM_STYLE_PAIR,0); dm_pad_pair_sources(1,1,1); }
+        if (pattern==2) { dm_pad_style(0,DM_STYLE_PAIR,0); dm_pad_pair_sources(0,1,3); dm_pad_style(1,DM_STYLE_PRO,0); dm_pad_style(2,DM_STYLE_RIGHT,0); }
+        atomic_store(&g_ids_supported,idsSet[i]); atomic_store(&g_styles_supported,stylesSet[j]);
+        dm_pad_players_ios(masks[m],manuals[n]);
+        dm_controller_limits limits={stylesSet[j],idsSet[i],0,2};
+        dm_controller_evaluation result=dm_controller_evaluate(dm_controller_current_routes(),limits);
+        uint32_t joined=0,ready=0;
+        for (int p=0;p<DM_PLAYERS;p++) {
+            joined|=(uint32_t)reported(p)<<p;
+            ready|=(uint32_t)(style_of(dm_player_npad(p))!=0)<<p;
+        }
+        CHECK(result.joined==joined,"shared evaluator preserves the live legacy joining mask");
+        CHECK(result.ready==ready,"shared evaluator matches actual live Npad style and pair readiness");
+        int count=__builtin_popcount(ready);
+        CHECK(result.result_count==(count>2 ? 2 : count),"result capping never adds or disconnects a player");
+    }
+    g_mode=1; atomic_store(&g_ids_supported,0x3ff); atomic_store(&g_styles_supported,0xffffffffu);
+    for (int p=0;p<DM_PLAYERS;p++) { dm_pad_style(p,0,0); dm_pad_pair_sources(p,0,0); }
+    dm_pad_explicit(0); dm_pad_players(1);
+    CHECK(!dm_controller_source_waiting(0,-1,0),"deliberate Unassigned is not waiting to join");
+    CHECK(!dm_controller_source_waiting(1,0,0),"a pair member already consumed by a player is not waiting");
+    CHECK(dm_controller_source_waiting(0,-2,0) && !dm_controller_source_waiting(0,-2,1),"automatic admission and merge policy keep their original ownership");
+}
+static pthread_mutex_t support_test_lock=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t support_test_changed=PTHREAD_COND_INITIALIZER;
+static int first_support_open,release_support;
+static _Atomic int ui_active,ui_peak,ui_arrivals,second_request_started;
+static int serialized_prompt(int minimum,int maximum) {
+    (void)maximum;
+    int ordinal=atomic_fetch_add(&ui_arrivals,1);
+    int active=atomic_fetch_add(&ui_active,1)+1;
+    if (active>atomic_load(&ui_peak)) atomic_store(&ui_peak,active);
+    if (!ordinal) {
+        CHECK(minimum==2,"first game request retains its own limits");
+        pthread_mutex_lock(&support_test_lock); first_support_open=1; pthread_cond_signal(&support_test_changed);
+        while (!release_support) pthread_cond_wait(&support_test_changed,&support_test_lock);
+        pthread_mutex_unlock(&support_test_lock); dm_pad_players(3);
+    } else { CHECK(minimum==3,"queued game request starts with its own limits"); dm_pad_players(7); }
+    atomic_fetch_sub(&ui_active,1); return 1;
+}
+typedef struct { int minimum,count; Result result; } support_thread_result;
+static void *support_thread(void *context) {
+    support_thread_result *result=context;
+    if (result->minimum==3) atomic_store(&second_request_started,1);
+    int8_t arg[8]={(int8_t)result->minimum,4,1,1,1,0}; int32_t info[2];
+    result->result=h_hid_ShowCtrl(info,arg); result->count=info[0]; return NULL;
+}
+static void t_support_exclusive(void) {
+    g_mode=1; ids((uint32_t[]){0,1,2},3); h_hid_SetStyles(0x1f);
+    dm_pad_players(1); prompt_callback=serialized_prompt; dm_controller_support_hook=fallback_hook;
+    fallback_calls=0; first_support_open=release_support=0;
+    atomic_store(&ui_active,0); atomic_store(&ui_peak,0); atomic_store(&ui_arrivals,0); atomic_store(&second_request_started,0);
+    support_thread_result a={.minimum=2},b={.minimum=3}; pthread_t first,second;
+    pthread_create(&first,NULL,support_thread,&a);
+    pthread_mutex_lock(&support_test_lock);
+    while (!first_support_open) pthread_cond_wait(&support_test_changed,&support_test_lock);
+    pthread_mutex_unlock(&support_test_lock);
+    pthread_create(&second,NULL,support_thread,&b);
+    while (!atomic_load(&second_request_started)) sched_yield();
+    int minimum=0; dm_controller_setup_requirements(NULL,NULL,&minimum,NULL);
+    CHECK(minimum==2 && atomic_load(&ui_arrivals)==1,"queued requests cannot replace the active request or open another UI");
+    CHECK(dm_controller_support_evaluation().ready_count==1,"the HID barrier stays available while the first UI waits");
+    pthread_mutex_lock(&support_test_lock); release_support=1; pthread_cond_signal(&support_test_changed); pthread_mutex_unlock(&support_test_lock);
+    pthread_join(first,NULL); pthread_join(second,NULL);
+    CHECK(a.result==RES_OK && a.count==2 && b.result==RES_OK && b.count==3,"serialized requests each receive their own single result");
+    CHECK(atomic_load(&ui_peak)==1 && atomic_load(&ui_arrivals)==2 && !fallback_calls,"joining and fallback never invoke simultaneously for either request");
+    prompt_callback=NULL; prompt_answer=1; prompt_join=3; dm_pad_players(1); h_hid_SetStyles(DM_STYLE_LEFT|DM_STYLE_RIGHT);
+    CHECK(h_hid_ShowCtrl((int32_t[2]){0},(int8_t[8]){2,4,1,1,1,0})==RES_CTRL_CANCELED && !fallback_calls,
+        "a joining answer that is still incompatible never opens a second automatic editor for the same request");
+    prompt_answer=-1; prompt_join=0; dm_controller_support_hook=NULL; h_hid_SetStyles(0xffffffffu); dm_pad_players(1);
 }
 
 int main(void) {
@@ -871,6 +955,8 @@ int main(void) {
     t_pair_full_gamepad_buttons();
     t_support_options();
     t_support_priority();
+    t_readiness_differential();
+    t_support_exclusive();
     printf("hid players: %d checks, %d failed\n", checks, fails);
     return fails != 0;
 }
