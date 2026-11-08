@@ -58,6 +58,7 @@ static dm_ios_routes ios_plan_routes_reserved(pad_slots previous, NSArray *rows,
         NSDictionary *choice = choices[key];
         if ((choice && [choice[@"player"] intValue] != -1) || (merge && !choice && !(plan.manual & 1u))) continue;
         id controller = cs_devices[key];
+        if (cs_waits_for_press(controller,choice)) continue;
         int slot = pad_slot_of(&previous, (__bridge const void *)controller);
         if (slot >= 0 && !plan.slots.owner[slot]) ios_route(&plan, sources, controller, row[@"name"], slot, choice);
     }
@@ -69,12 +70,13 @@ static dm_ios_routes ios_plan_routes_reserved(pad_slots previous, NSArray *rows,
         NSDictionary *choice = choices[key];
         if (choice && [choice[@"player"] intValue] != -1) continue;
         id controller = cs_devices[key];
+        if (cs_waits_for_press(controller,choice)) continue;
         const void *owner = (__bridge const void *)controller;
         if (pad_slot_of(&plan.slots, owner) >= 0) continue;
         if (merge && !choice && !(plan.manual & 1u)) {
             ios_route(&plan, sources, controller, row[@"name"], 0, nil);
         } else {
-            int slot = pad_slot_take(&plan.slots, owner, [row[@"name"] UTF8String] ?: "");
+            int slot = cs_press_to_join ? pad_slot_take_lowest(&plan.slots,owner,[row[@"name"] UTF8String] ?: "") : pad_slot_take(&plan.slots, owner, [row[@"name"] UTF8String] ?: "");
             ios_route(&plan, sources, controller, row[@"name"], slot, choice);
         }
     }

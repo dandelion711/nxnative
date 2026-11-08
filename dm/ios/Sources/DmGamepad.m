@@ -600,15 +600,14 @@ BOOL dm_ios_controller_identify(NSString *deviceID) {
     return cs_identify(deviceID, dm_haptics_apple_identify);
 }
 
+static BOOL g_routes_publishing;
 static int32_t axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * 32767); }
 static void read_pad(GCExtendedGamepad *g) {
-    if ([g_join poll] || atomic_load(&g_configuring)) return;
+    if (g_routes_publishing) return;
     GCController *controller = g.controller;
     int p = pad_slot_of(&g_routes.slots, (__bridge const void *)controller);
     if (p < 0) for (int slot=0;slot<DM_PLAYERS;slot++) if ([g_sources[slot] containsObject:controller]) { p=slot; break; }
-    if (p < 0) return;
     int role=cs_device_role(controller,g_overrides);
-    if (!role) dm_haptics_apple_controller(p, g.controller);
     _Static_assert(DM_BTN_A == 1u << B_A && DM_BTN_B == 1u << B_B && DM_BTN_X == 1u << B_X && DM_BTN_Y == 1u << B_Y, "face button bits");
     uint64_t m = dm_pad_face(g);   // by position, a Nintendo pad by its labels
     #define K(btn, bit) if (btn.isPressed) m |= 1ull << bit
@@ -617,6 +616,13 @@ static void read_pad(GCExtendedGamepad *g) {
     if (g.leftThumbstickButton) K(g.leftThumbstickButton, B_LS); if (g.rightThumbstickButton) K(g.rightThumbstickButton, B_RS);
     K(g.dpad.left, B_LEFT); K(g.dpad.up, B_UP); K(g.dpad.right, B_RIGHT); K(g.dpad.down, B_DOWN);
     #undef K
+    NSString *key=[cs_devices allKeysForObject:controller].firstObject;
+    if (p<0 && m && cs_waits_for_press(controller,g_overrides[key])) {
+        cs_admit(controller); [g_view padsChanged:nil];
+        p=pad_slot_of(&g_routes.slots,(__bridge const void *)controller);
+    }
+    if ([g_join poll] || atomic_load(&g_configuring) || p<0) return;
+    if (!role) dm_haptics_apple_controller(p,controller);
     if (role) (dm_pad_is_joycon(controller) ? dm_pad_set_side : dm_pad_set_pair_gamepad)(p,role,m,axis(g.leftThumbstick.xAxis.value),axis(g.leftThumbstick.yAxis.value));
     else dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
 }
@@ -659,6 +665,7 @@ NSDictionary<NSString *, id> *dm_ios_controller_status(NSArray<NSDictionary<NSSt
 // Both hotplug and Apply use this transaction. Invalidate old callbacks before
 // attaching new ones, while keeping untouched devices' motion sources alive.
 static void publish_routes(dm_ios_routes plan, NSArray<NSMutableArray<GCController *> *> *sources) {
+    g_routes_publishing=YES;
     NSMutableArray *nextRoles=[NSMutableArray new];
     for (int p=0;p<DM_PLAYERS;p++) {
         NSMutableArray *roles=[NSMutableArray new];
@@ -691,7 +698,7 @@ static void publish_routes(dm_ios_routes plan, NSArray<NSMutableArray<GCControll
         dm_pad_pair_sources(p,plan.sides[p]!=0,plan.sides[p]);
         dm_pad_style(p, plan.styles[p], plan.styles[p] && !dm_pad_is_joycon(sources[p].firstObject));
         for (GCController *controller in sources[p]) {
-            pad_keep_system_buttons(controller);
+            cs_admit(controller); pad_keep_system_buttons(controller);
             controller.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *pad, GCControllerElement *element) {
                 (void)element;
                 read_pad(pad);
@@ -708,6 +715,8 @@ static void publish_routes(dm_ios_routes plan, NSArray<NSMutableArray<GCControll
         dm_haptics_apple_pair(p,left,right);
     }
     dm_pad_players_ios(pad_slot_mask(&plan.slots), plan.manual);
+    g_routes_publishing=NO;
+    for (int p=0;p<DM_PLAYERS;p++) for (GCController *c in sources[p]) read_pad(c.extendedGamepad);
 }
 
 NSString *dm_ios_controller_apply(NSArray<NSDictionary<NSString *, id> *> *choices) {
@@ -755,7 +764,15 @@ NSString *dm_ios_controller_apply(NSArray<NSDictionary<NSString *, id> *> *choic
     dm_pad_reconfigure_begin();
     publish_routes(plan, sources);
     dm_pad_reconfigure_end();
-    [self usePhysicalPads:pad_slot_mask(&plan.slots) != 0];
+    BOOL waiting=NO;
+    for (NSDictionary *row in rows) {
+        GCController *c=cs_devices[row[@"id"]];
+        if (cs_waits_for_press(c,g_overrides[row[@"id"]])) {
+            waiting=YES; pad_keep_system_buttons(c);
+            c.extendedGamepad.valueChangedHandler=^(GCExtendedGamepad *g,GCControllerElement *el) { (void)el; read_pad(g); };
+        }
+    }
+    [self usePhysicalPads:waiting || pad_slot_mask(&plan.slots) != 0];
 }
 - (void)usePhysicalPads:(BOOL)any {
     _padOff = any;
@@ -866,7 +883,7 @@ void dm_gamepad_cancel_join(void) {
     [g_join cancelAll]; atomic_store(&g_join_blocked,0);
 }
 
-UIView *dm_gamepad_view(CGRect frame) { DmGamepad *v = [[DmGamepad alloc] initWithFrame:frame]; g_view = v; controller_join_start(); return v; }
+UIView *dm_gamepad_view(CGRect frame) { const char *e=getenv("DM_PAD_PRESS_TO_JOIN"); cs_press_to_join=!merge_automatic_pads() && e && atoi(e); DmGamepad *v = [[DmGamepad alloc] initWithFrame:frame]; g_view = v; controller_join_start(); return v; }
 void dm_gamepad_arrange(UIView *view, DmLayout layout) { [(DmGamepad *)view arrange:layout]; }
 void dm_gamepad_opmode_changed(void) { [g_view opmodeChanged]; }
 void dm_gamepad_touch_feedback(bool on) { [g_view setTouchFeedback:on]; }

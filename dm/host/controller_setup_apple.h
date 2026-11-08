@@ -7,6 +7,20 @@ static NSMutableDictionary<NSString *, id> *cs_devices;
 static NSDictionary<NSString *, NSDictionary *> *cs_choices;
 static NSDictionary<NSString *, NSDictionary *> *cs_source_info;
 static int cs_explicit;
+// Admission belongs to this connection, and only affects the existing optional
+// press-to-join mode. A draft preview never admits a waiting automatic device.
+static BOOL cs_press_to_join;
+static NSMutableSet<NSString *> *cs_admitted;
+static void cs_admit(id source) {
+    NSString *key=[cs_devices allKeysForObject:source].firstObject;
+    if (!key) return;
+    if (!cs_admitted) cs_admitted=[NSMutableSet new];
+    [cs_admitted addObject:key];
+}
+static BOOL cs_waits_for_press(id source,NSDictionary *choice) {
+    NSString *key=[cs_devices allKeysForObject:source].firstObject;
+    return cs_press_to_join && !choice && ![cs_admitted containsObject:key];
+}
 
 // The owner is the input adapter's connection object, not a model name or an
 // enumeration position. GC-only clients use cs_update below. The Mac backend
@@ -24,6 +38,7 @@ static NSArray *cs_update_sources(NSArray<NSDictionary *> *sources) {
         row[@"id"]=key; row[@"name"]=source[@"name"] ?: @"Controller"; [rows addObject:row]; info[key]=row;
     }
     for (NSString *key in cs_devices.allKeys) if (![seen containsObject:key]) [cs_devices removeObjectForKey:key];
+    [cs_admitted intersectSet:seen];
     cs_source_info=info;
     return rows;
 }

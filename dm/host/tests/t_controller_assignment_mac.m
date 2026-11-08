@@ -200,7 +200,34 @@ void dm_motion_clear_side(int p,int role) { (void)role; dm_motion_clear(p); }
 void dm_pad_pair_sources(int p,int grouped,uint32_t sides) { grouped_sides[p]=grouped ? sides : 0; }
 void dm_haptics_apple_pair(int p,GCController *left,GCController *right) { group_outputs[p][0]=left; group_outputs[p][1]=right; }
 
+static void press_to_join_routes(void) {
+    SwapDevice *a=device(),*b=device();
+    NSArray *rows=cs_update((id)@[a,b]);
+    NSString *aid=rows[0][@"id"],*bid=rows[1][@"id"];
+    cs_press_to_join=YES; cs_admitted=[NSMutableSet new];
+    dm_ios_routes empty=ios_plan_routes((pad_slots){0},rows,@{},NO,ios_sources());
+    assert(!pad_slot_mask(&empty.slots));
+    // Previewing a manual selection may show it as ready, but never admits it.
+    NSDictionary *manual=@{aid:@{@"id":aid,@"player":@2,@"style":@"pro"}};
+    dm_ios_routes draft=ios_plan_routes(empty.slots,rows,manual,NO,ios_sources());
+    assert(pad_slot_mask(&draft.slots)==2 && !cs_admitted.count);
+    cs_admit((id)b);
+    dm_ios_routes first=ios_plan_routes(empty.slots,rows,@{},NO,ios_sources());
+    assert(first.slots.owner[0]==(__bridge const void *)b && !first.slots.owner[1]);
+    cs_admit((id)a);
+    dm_ios_routes second=ios_plan_routes(first.slots,rows,@{},NO,ios_sources());
+    assert(second.slots.owner[0]==(__bridge const void *)b && second.slots.owner[1]==(__bridge const void *)a);
+    assert([cs_admitted containsObject:bid]);
+    cs_update((id)@[a]); assert(![cs_admitted containsObject:bid]);
+    cs_update((id)@[a,b]);
+    dm_ios_routes reconnect=ios_plan_routes(second.slots,cs_update((id)@[a,b]),@{},NO,ios_sources());
+    assert(!reconnect.slots.owner[0] && reconnect.slots.owner[1]==(__bridge const void *)a);
+    cs_press_to_join=NO; cs_admitted=nil;
+    puts("press-to-join: waiting preview, first-press order, manual draft and reconnect OK");
+}
+
 int main(void) { @autoreleasepool {
+    press_to_join_routes();
     SwapDevice *a = device(), *b = device(), *c = device(); devices = @[a, b, c]; routing = [NSMutableArray new];
     pad_slots slots = {0}; GCController *held[DM_PLAYERS] = {nil}; int merge = 0, own = 0;
     dm_controller_host host = {&slots, held, &merge, &own, getDevices, mode, readPad, keep, changed};

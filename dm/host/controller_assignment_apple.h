@@ -155,14 +155,14 @@ static NSString *controller_assignment_apply(dm_controller_host host, NSArray *c
             if (!owners[p]) continue;
             GCController *c = owners[p];
             pad_slot_assign(host.slots, (__bridge const void *)c, (c.vendorName.UTF8String ?: "?"), p); host.held[p] = c;
-            host.keep(c);
+            cs_admit(c); host.keep(c);
             void (*read)(GCExtendedGamepad *) = host.read;
             c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read(g); };
             cs_pair_left[p]=left[p]; cs_pair_right[p]=right[p];
             if (sides) {
                 for (int role=1;role<=2;role++) {
                     GCController *side=role==1 ? left[p] : right[p]; if (!side) continue;
-                    host.keep(side);
+                    cs_admit(side); host.keep(side);
                     side.extendedGamepad.valueChangedHandler=^(GCExtendedGamepad *g,GCControllerElement *el) { (void)el; read(g); };
                     dm_motion_attach_role(side,p,role);
                 }
