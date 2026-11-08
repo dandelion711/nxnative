@@ -296,9 +296,10 @@ int main(void) { @autoreleasepool {
     assert(side_samples[0][0]==1 && side_samples[0][1]==1);
     NSArray *partial=@[pairChoices[0]]; assert(cs_pair_error(partial));
     assert(controller_assignment_apply(host,partial,0,8,NULL));
-    devices=@[a]; cs_pair_reconciling=YES;
+    devices=@[a]; requestMin=2; cs_pair_reconciling=YES;
     assert(!controller_assignment_apply(host,partial,0,8,NULL)); cs_pair_reconciling=NO;
-    assert(grouped_sides[0]==1);
+    assert(grouped_sides[0]==1 && !cs_pair_right[0] && !b.motion.valueChangedHandler);
+    cs_pair_reconciling=NO; assert(controller_assignment_apply(host,partial,0,8,NULL)); requestMin=0;
     NSArray *plain=@[@{@"id":pairA,@"player":@1,@"style":@"pro"}];
     assert(!controller_assignment_apply(host,plain,1,8,NULL) && !grouped_sides[0]);
     devices=@[]; assert(!controller_assignment_apply(host,@[],0,8,NULL));

@@ -106,7 +106,8 @@ static NSString *controller_assignment_apply(dm_controller_host host, NSArray *c
         minimum=MAX(minimum,low); maximum=MIN(maximum,high);
         NSArray *resolved = controller_assignment_resolve(host, choices);
         int count=dm_controller_capped_count(controller_assignment_evaluate(host,choices).ready_count,maximum);
-        if (minimum>maximum || count < minimum) return @"Assign the number of supported controllers this game requests.";
+        // A physical disconnect must be published even while the game waits for more players.
+        if (!cs_pair_reconciling && (minimum>maximum || count < minimum)) return @"Assign the number of supported controllers this game requests.";
         BOOL edited = NO;
         for (NSDictionary *choice in next.allValues)
             if ([choice[@"player"] intValue] != -1 || ![choice[@"style"] isEqual:@"auto"]) edited = YES;
