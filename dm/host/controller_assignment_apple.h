@@ -137,8 +137,7 @@ static NSString *controller_assignment_apply(dm_controller_host host, NSArray *c
     @try {
         int low=0,high=DM_PLAYERS; dm_controller_setup_requirements(NULL,NULL,&low,&high);
         minimum=MAX(minimum,low); maximum=MIN(maximum,high);
-        NSArray *sources=nil;
-        dm_ios_routes plan=controller_assignment_plan(host,choices,NULL,&sources,NULL);
+        dm_ios_routes plan=controller_assignment_plan(host,choices,NULL,NULL,NULL);
         NSArray *resolved = controller_assignment_resolve(host, choices);
         int count=dm_controller_capped_count(controller_assignment_evaluate(host,choices).ready_count,maximum);
         // A physical disconnect must be published even while the game waits for more players.
