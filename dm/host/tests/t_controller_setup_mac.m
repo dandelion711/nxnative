@@ -15,7 +15,8 @@ static BOOL signal_device(GCController *device) { signaled = device; return YES;
 int main(int argc, char **argv) { @autoreleasepool {
     if (argc == 3 && !strcmp(argv[1], "--server")) {
         int started = cs_run(atoi(argv[2]), NULL);
-        return started && getenv("NX_CONTROLLER_TEST_START") && !strcmp(getenv("NX_CONTROLLER_TEST_START"), "from-window") ? 0 : 1;
+        const char *value=getenv("NX_CONTROLLER_TEST_START");
+        return started && value && !strcmp(value, "from-window") ? 0 : 1;
     }
     SetupDevice *a = [SetupDevice new], *b = [SetupDevice new], *replacement = [SetupDevice new];
     for (SetupDevice *d in @[a, b, replacement]) { d.vendorName = @"DualSense"; d.extendedGamepad = [NSObject new]; }
@@ -29,6 +30,10 @@ int main(int argc, char **argv) { @autoreleasepool {
     NSDictionary *right = @{@"id": bid, @"player": @1, @"style": @"right"};
     assert(!cs_accept(@{@"choices": @[left, right], @"environment": @{}, @"explicit": @YES}));
     uint32_t style;
+    assert(cs_source_player(nil,&style)==-2 && !style && cs_device_role(nil,@{})==0);
+    cs_admit(nil); cs_admit(replacement); cs_press_to_join=YES;
+    assert(!cs_waits_for_press(nil,nil) && !cs_waits_for_press(replacement,nil) && !cs_admitted.count);
+    cs_press_to_join=NO;
     assert(cs_player((id)a, &style) == 1 && style == DM_STYLE_LEFT);
     assert(cs_player((id)b, &style) == 0 && style == DM_STYLE_RIGHT);
     NSDictionary *duplicate = @{@"id": bid, @"player": @2, @"style": @"right"};
@@ -36,6 +41,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     assert(!getenv("NX_CONTROLLER_TEST_INVALID") && cs_player((id)b, &style) == 0);
     assert(cs_accept(@{@"choices": @[left], @"environment": @{@"bad=key": @"value"}, @"explicit": @YES}));
     cs_update((id)@[b, replacement]);
+    cs_press_to_join=YES; assert(!cs_waits_for_press(a,nil)); cs_press_to_join=NO;
     assert(cs_player((id)replacement, &style) == -2);
     assert(!cs_identify(aid, signal_device) && signaled == (id)b);
     assert(cs_accept(@{@"choices": @[left], @"environment": @{}, @"explicit": @YES}));

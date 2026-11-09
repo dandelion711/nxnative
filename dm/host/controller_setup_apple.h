@@ -12,14 +12,14 @@ static int cs_explicit;
 static BOOL cs_press_to_join;
 static NSMutableSet<NSString *> *cs_admitted;
 static void cs_admit(id source) {
-    NSString *key=[cs_devices allKeysForObject:source].firstObject;
+    NSString *key=source ? [cs_devices allKeysForObject:source].firstObject : nil;
     if (!key) return;
     if (!cs_admitted) cs_admitted=[NSMutableSet new];
     [cs_admitted addObject:key];
 }
 static BOOL cs_waits_for_press(id source,NSDictionary *choice) {
-    NSString *key=[cs_devices allKeysForObject:source].firstObject;
-    return cs_press_to_join && !choice && ![cs_admitted containsObject:key];
+    NSString *key=source ? [cs_devices allKeysForObject:source].firstObject : nil;
+    return key && cs_press_to_join && !choice && ![cs_admitted containsObject:key];
 }
 
 // The owner is the input adapter's connection object, not a model name or an
@@ -48,7 +48,7 @@ static NSArray *cs_update(NSArray<GCController *> *devices) {
     return cs_update_sources(sources);
 }
 static int cs_source_player(id source, uint32_t *style) {
-    NSString *key=[cs_devices allKeysForObject:source].firstObject;
+    NSString *key=source ? [cs_devices allKeysForObject:source].firstObject : nil;
     NSDictionary *choice=key ? cs_choices[key] : nil;
     int player=[choice[@"player"] intValue];
     if (style) *style=cs_style(choice[@"style"]);
@@ -56,7 +56,7 @@ static int cs_source_player(id source, uint32_t *style) {
 }
 
 static int cs_device_role(GCController *c, NSDictionary *choices) {
-    NSString *key=[cs_devices allKeysForObject:c].firstObject;
+    NSString *key=c ? [cs_devices allKeysForObject:c].firstObject : nil;
     return key ? cs_role(choices[key]) : 0;
 }
 // Shared by startup and live Apply. Neither UI may partially publish an invalid draft.

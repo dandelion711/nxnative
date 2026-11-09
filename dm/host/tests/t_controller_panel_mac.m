@@ -41,8 +41,10 @@ static void capture(NSWindow *window, NSString *path) {
     while (end.timeIntervalSinceNow > 0) { [window.contentView layoutSubtreeIfNeeded]; [NSApp updateWindows]; [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.01]]; }
     [window displayIfNeeded];
     NSBitmapImageRep *bitmap = [window.contentView bitmapImageRepForCachingDisplayInRect:window.contentView.bounds];
+    assert(bitmap);
     [window.contentView cacheDisplayInRect:window.contentView.bounds toBitmapImageRep:bitmap];
-    [[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:path atomically:YES];
+    NSData *png=[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    assert(png && [png writeToFile:path atomically:YES]);
 }
 int main(int argc, char **argv) { @autoreleasepool {
     [NSApplication sharedApplication]; [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited]; [NSApp finishLaunching];

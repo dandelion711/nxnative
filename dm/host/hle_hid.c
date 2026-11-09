@@ -584,7 +584,7 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) { HID_GUARD;
     memset(s, 0, sizeof *s);
     s->sampling = atomic_fetch_add(&g_sampling, 1) + 1;
     int pl = player_of(id);
-    if (!(style_for_player(id, pl) & style)) return;   // no controller of this id / style: attributes = 0
+    if (pl < 0 || !(style_for_player(id, pl) & style)) return;   // no controller of this id / style: attributes = 0
     // Player 1: keyboard / touch, script, its controller and the players merged into it; another player: its own controller path
     uint32_t src = pl ? 1u << pl : 1u | merged_players();
     uint64_t b = 0; int32_t a[4] = {0};
@@ -1039,7 +1039,7 @@ static uint32_t vib_targets(uint32_t h) {
     unsigned type = h & 0xff, id = h >> 8 & 0xff, motor = h >> 16 & 0xff;
     if (h >> 24 || motor > 1 || type < 3 || type > 7 || (type == 6 && motor != 0) || (type == 7 && motor != 1)) return 0;
     int p = player_of(id);
-    if (style_for_player(id, p) != (1u << (type - 3))) return 0;
+    if (p < 0 || style_for_player(id, p) != (1u << (type - 3))) return 0;
     return dm_haptics_available() & (p == 0 ? 1u | merged_players() : 1u << p);
 }
 static void vib_send(const uint32_t *handles, const dm_vibration *values, int n) { HID_GUARD;

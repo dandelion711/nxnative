@@ -738,7 +738,7 @@ static void t_two_source_pair(void) {
     dm_pad_pair_sources(0,0,0); dm_pad_style(0,DM_STYLE_PAIR,0); motion_now+=10000000;
     dm_motion_set(0,(float[]){0,0,-1},(float[]){0,0,1});
     h_hid_SixStates(&left,1,&handles[0]); h_hid_SixStates(&right,1,&handles[1]);
-    CHECK(!memcmp(left.gyro,right.gyro,sizeof left.gyro),"single-gamepad pair emulation retains shared motion");
+    CHECK(left.gyro[0]==right.gyro[0] && left.gyro[1]==right.gyro[1] && left.gyro[2]==right.gyro[2],"single-gamepad pair emulation retains shared motion");
     dm_pad_style(0,DM_STYLE_AUTO,0); dm_pad_explicit(0); dm_pad_players(1); h_hid_SetStyles(0xffffffffu);
 }
 

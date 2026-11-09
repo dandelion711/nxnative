@@ -144,6 +144,7 @@ dm/ios/*	*:*	the iOS app
 dm/third_party/ryujinx/src/Ryujinx.Graphics.Shader/Translation/Transforms/GeometryToCompute.cs	shader:stage:gs	geometry compute input and output lowering
 
 # Native Apple controller configuration and game-facing styles
+dm/host/pad_hid_mac.h:hidpad_gc_controllers	hle:_ZN2nn3hid*	native controller discovery excludes sources already owned by HID
 dm/host/controller*.h	hle:_ZN2nn3hid*	controller discovery, assignment, readiness and native controller applets
 dm/host/ctrl_prompt.h	hle:_ZN2nn3hid*ShowControllerSupport*	controller joining completion and input settling
 dm/host/home_quit_mac.h	present:*	the shared Mac Home and controller-joining card views
