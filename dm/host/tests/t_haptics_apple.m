@@ -348,9 +348,18 @@ int main(void) { @autoreleasepool {
     assert(pe.plainPlayers == 1 && pe.testPlayer.levels.lastObject.floatValue == 0.2f);
     advance(1.1);
     int pulses = pe.plainPlayers; assert(pulses >= 3);   // renewed while the effect lasts
+    advance(0.3); pulses = pe.plainPlayers;
+    DmRumbleChannel *pulseChannel = channels[0].firstObject;
+    assert(pulseChannel.pulseEnd - PULSE > pe.currentTime); // the next pulse is queued, not playing yet
+    TestPlayer *queued = (id)pulseChannel.pattern, *playing = (id)pulseChannel.previous;
+    send_pair(0, 0); drain();
+    assert(queued.stops == 1 && playing.stops == 0); // cancel only the future pulse; never cut a playing event
+    assert(pulseChannel.pattern == (id)playing && playing.levels.lastObject.floatValue == 0);
+    send_pair(0.3, 0); drain(); // a fresh effect before the current pulse ends must renew normally
+    assert(pe.plainPlayers == pulses + 1); pulses = pe.plainPlayers;
     send_pair(0, 0); advance(1.7);
-    assert(pe.plainPlayers == pulses && pe.testPlayer.levels.lastObject.floatValue == 0);   // silent: no new pulse
-    assert(pe.stops == 1 && pe.testPlayer.stops == 0);   // the engine stopped after the last pulse, which was not cut
+    assert(pe.plainPlayers == pulses && dm_haptics_actual(0, 0).amplitude_low == 0);   // silent: no new pulse
+    assert(pe.stops == 1 && playing.stops == 0);   // the playing event was not cut; only the queued event was canceled
     send_pair(0.5, 0); drain();
     assert(plainc.haptics.attempts == 2 && pe.plainPlayers == pulses + 1 && pe.testPlayer.levels.lastObject.floatValue == 0.5f);
     // A plain player whose engine stopped under it raises: the engine is dropped without calling its players again (a stop sends them zero,

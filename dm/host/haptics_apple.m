@@ -112,9 +112,17 @@ static void report(NSError *e, NSString *target, const char *stage) {
     dm_haptics_clear(self.player);
 }
 - (void)stop { [self guarded:"stop" work:^{ [self halt]; }]; }
+// A queued pulse has its own initial level, which would replay after an immediate silence.
+- (BOOL)cancelPendingPulse:(NSError **)error {
+    if (!self.simple || !self.pattern || self.pulseEnd - PULSE <= self.engine.currentTime) return YES;
+    if (![self.pattern stopAtTime:CHHapticTimeImmediate error:error]) return NO; // not started: never cut a playing event
+    self.pattern = self.previous; self.previous = nil; self.pulseEnd -= PULSE;
+    return YES;
+}
 // stop's work, for callers already inside guarded:work:
 - (void)halt {
     self.generation++; self.silenceGeneration++;
+    [self cancelPendingPulse:nil];
     self.engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) { (void)reason; }; self.engine.resetHandler = ^{};
     if (self.simple) {
         // Never cut a pulse: silence the playing ones and stop the engine once the last has ended
@@ -192,7 +200,9 @@ static void report(NSError *e, NSString *target, const char *stage) {
     if ([self.target hasPrefix:@"controller"]) level.intensity = controller_level(level.intensity);
     uint64_t silence = ++self.silenceGeneration;
     NSError *error = nil;
+    BOOL wasSilent = self.level.intensity == 0;
     self.level = level;
+    if (level.intensity == 0 && ![self cancelPendingPulse:&error]) { [self failed:error stage:"cancel queued pulse"]; return; }
     if (!self.pattern) {
         if (level.intensity == 0) return;
         if (now() < self.retryAfter) {
@@ -230,7 +240,7 @@ static void report(NSError *e, NSString *target, const char *stage) {
         }
         if (!self.pattern) { [self failed:error stage:"create player"]; return; }
         if (!self.simple && ![self.pattern startAtTime:CHHapticTimeImmediate error:&error]) { [self failed:error stage:"start player"]; return; }
-    } else if (self.simple && level.intensity > 0 && self.pulseEnd <= self.engine.currentTime) {
+    } else if (self.simple && level.intensity > 0 && (wasSilent || self.pulseEnd <= self.engine.currentTime)) {
         if (![self pulse:&error]) { [self failed:error stage:"start pulse"]; return; }   // the pulses ran out while the effect was silent
     }
     // Controls live outside the loop: the loop boundary never replays an initial intensity.

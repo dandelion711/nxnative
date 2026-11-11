@@ -1064,7 +1064,7 @@ static void vib_send(const uint32_t *handles, const dm_vibration *values, int n)
         clock_gettime(CLOCK_MONOTONIC, &ts);
         uint64_t now = ts.tv_sec; sends += n; dropped += unrouted;
         for (int i = 0; i < n; i++) peak = fmaxf(peak, fmaxf(values[i].amplitude_low, values[i].amplitude_high));
-        if (now != t0) { LOG("rumble: %llu values sent, %llu with no output, peak amplitude %.2f, handle %#x", sends, dropped, peak, handles[0]); sends = dropped = 0; peak = 0; t0 = now; }
+        if (now != t0) { LOG("rumble: %llu values sent, %llu with no output, peak amplitude %.9g, handle %#x", sends, dropped, peak, handles[0]); sends = dropped = 0; peak = 0; t0 = now; }
         pthread_mutex_unlock(&log_lock);
     }
     dm_haptics_send(updates, count);
