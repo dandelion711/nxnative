@@ -279,6 +279,18 @@ int main(void) { @autoreleasepool {
     send_pair(0, 0);
     assert(left.testPlayer.levels.lastObject.floatValue == 0 && right.testPlayer.levels.lastObject.floatValue == 0);
     assert(left.testPlayer.levels.count == 2);   // short pulse ends immediately, without a minimum duration
+    dispatch_semaphore_t entered = dispatch_semaphore_create(0), release = dispatch_semaphore_create(0);
+    dispatch_async(queue, ^{ dispatch_semaphore_signal(entered); dispatch_semaphore_wait(release, DISPATCH_TIME_FOREVER); });
+    dispatch_semaphore_wait(entered, DISPATCH_TIME_FOREVER);
+    NSUInteger beforeBacklog = left.testPlayer.levels.count;
+    for (int i = 1; i <= 100; i++) {
+        dm_vibration_update update = {0,0,{(float)i / 100,160,0,320}};
+        dm_haptics_send(&update,1);
+    }
+    dm_vibration_update silence = {0,0,{0,160,0,320}}; dm_haptics_send(&silence,1);
+    dispatch_semaphore_signal(release); drain();
+    assert(left.testPlayer.levels.count == beforeBacklog + 1 && left.testPlayer.levels.lastObject.floatValue == 0); // never replay a backlog of old effects
+
     send_pair(0.4, 0.5);
     advance(1.1);
     assert(left.testPlayer.levels.lastObject.floatValue == 0.4f && left.testPlayer.stops == 0);   // old idle timer cannot stop a new effect

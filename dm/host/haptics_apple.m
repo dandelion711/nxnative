@@ -1,5 +1,5 @@
 // Core Haptics adapts the game's bands; it cannot reproduce the Switch's exact waveforms.
-// All engines and players belong to one serial queue. Guest threads enqueue ordered snapshots only.
+// All engines and players belong to one serial queue. Obsolete pending snapshots yield to the latest motor state.
 #import "haptics_apple.h"
 #import <CoreHaptics/CoreHaptics.h>
 #import <TargetConditionals.h>
@@ -13,6 +13,7 @@
 #endif
 #include <math.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <time.h>
 
 @interface DmRumbleChannel : NSObject
@@ -353,9 +354,22 @@ static void sink_apply(dm_haptic_state s) {   // on the queue: Rumble strength a
     sinks[s.player](&s);
 }
 static void sink_silence(int p) { dm_haptic_state z = {0}; z.player = p; if (sinks[p]) sinks[p](&z); }
+static _Atomic uint64_t latest[DM_PLAYERS];
 static void apply(dm_haptic_state s) {
+    uint64_t revision = atomic_fetch_add(&latest[s.player], 1) + 1;
+    NSTimeInterval queuedAt = now();
     dispatch_async(queue, ^{ @autoreleasepool {
-        if (s.epoch != dm_haptics_epoch(s.player)) return;
+        if (revision != atomic_load(&latest[s.player]) || s.epoch != dm_haptics_epoch(s.player)) return;
+        if (getenv("DM_RUMBLE_LOG")) {
+            static NSTimeInterval lastLog[DM_PLAYERS]; static uint64_t delivered[DM_PLAYERS]; static BOOL wasSilent[DM_PLAYERS];
+            BOOL silent = !s.motor[0].amplitude_low && !s.motor[0].amplitude_high && !s.motor[1].amplitude_low && !s.motor[1].amplitude_high;
+            NSTimeInterval t = now();
+            if (silent != wasSilent[s.player] || t - lastLog[s.player] >= 1) {
+                fprintf(stderr, "haptics output: player %d lag %.3f ms, discarded %llu pending snapshots, motors %.9g/%.9g %.9g/%.9g\n", s.player + 1, (t - queuedAt) * 1000, (unsigned long long)(revision - delivered[s.player] - 1), s.motor[0].amplitude_low, s.motor[0].amplitude_high, s.motor[1].amplitude_low, s.motor[1].amplitude_high);
+                lastLog[s.player] = t;
+            }
+            delivered[s.player] = revision; wasSilent[s.player] = silent;
+        }
         if (sinks[s.player]) { sink_apply(s); return; }   // the player is in range, as channels[] below assumes (hle_haptics.c)
         NSArray<DmRumbleChannel *> *out = channels[s.player];
 #if !TARGET_OS_IPHONE
