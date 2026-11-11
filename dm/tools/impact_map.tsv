@@ -141,6 +141,8 @@ dm/host/loader.c	*:*	module loading
 dm/host/hle.c	hle:*	the HLE tables
 dm/host/front_mac.m	present:*	the Mac front end
 dm/host/dm_input.h	hle:*hid*	the shared input interface
+dm/host/controller_setup*.h	hle:*hid*	controller setup UI, pending source routes and readiness
+dm/host/haptics_apple.*	hle:*Vib*	Apple controller vibration and identification
 dm/host/motion_apple.h	hle:*SixAxisSensor*	controller motion supplied by GameController
 dm/host/pad_apple.h	hle:*hid*	controller face buttons from GameController
 dm/host/motion_fusion.h	hle:*SixAxisSensor*	six-axis motion mapping and orientation
@@ -152,3 +154,5 @@ dm/host/pad_switch2_apple.m	hle:*hid*	Switch 2 controllers over Bluetooth LE (of
 dm/host/front.h	present:*	the front end
 dm/ios/*	*:*	the iOS app
 dm/third_party/ryujinx/src/Ryujinx.Graphics.Shader/Translation/Transforms/GeometryToCompute.cs	shader:stage:gs	geometry compute input and output lowering
+
+dm/host/pad_style.h	hle:*hid*	full gamepad adaptation for a single Joy-Con

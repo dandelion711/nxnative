@@ -6,6 +6,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+void dm_controller_menu_open(void);   // DmGamepad.m: opens SimpleUI without blocking the UI thread
 void *dm_game_menu(void);   // GameMenu.swift: a retained UIMenu, rebuilt each time it opens
 int dm_pad_layout(void);   // DmGamepad.m: 0 = 2D, 1 = 3D, 2 = Tap (DM_GAME_PAD_LAYOUT's numbers)
 bool dm_pad_layout_offered(int layout);   // Tap only in handheld mode

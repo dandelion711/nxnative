@@ -39,3 +39,5 @@ s2_pad *dm_switch2_pads(void);                          // the pads, a list thro
 // pad's controllers as s2_rumble_pick says: every value the game sets plays once, in its own 5 ms sample (switch2_proto.h, Rumble timing), three to a packet every 15 ms while they
 // buzz, then a few packets of silence (a write without response can be lost).
 void dm_switch2_rumble(const dm_haptic_state *state);
+
+int dm_switch2_identify(s2_pad *pad); // main queue: briefly invert the device LEDs, restore the upstream player pattern

@@ -54,6 +54,7 @@ static void s2_rumble_limit(s2_haptic *v) { float lo = v->lf_amp / 1023.f, hi = 
 @property (nonatomic) int use;      // S2_ADV_PAIR, S2_ADV_TAKE or S2_ADV_WAKE: why it was connected
 @property (nonatomic) s2_pad *pad;
 @property (nonatomic) BOOL live;
+@property (nonatomic) uint64_t identifyUntil;
 @end
 
 static NSMutableDictionary<NSUUID *, S2Session *> *g_sessions;
@@ -162,8 +163,12 @@ static s2_pad *s2_pad_for(uint16_t pid) {   // a Joy-Con joins a pad that has th
         [s readMemory:0x0B at:factory done:^(NSData *f) { S2Session *s2 = w; if (!s2) return; if (f) s2_cal_parse(f.bytes, f.length, &s2->_cal[slot]); done(); }];
     }];
 }
+- (uint8_t)playerLEDs {
+    int p = s2_player(_pad); uint8_t pattern = s2_led_pattern[p >= 0 && p < 8 ? p : 0];
+    return now_ns() < self.identifyUntil ? (uint8_t)(pattern ^ 0x0F) : pattern;
+}
 - (void)setLEDs:(void (^)(void))done {
-    int p = s2_player(_pad); uint8_t pl[4] = {s2_led_pattern[p >= 0 && p < 8 ? p : 0], 0, 0, 0};
+    uint8_t pl[4] = {[self playerLEDs], 0, 0, 0};
     [self send:S2_CMD_LEDS sub:S2_SUB_LEDS_SET payload:pl len:4 done:^(NSData *r) { (void)r; if (done) done(); }];
 }
 // After the front end's read(): it may have given the pad a player at its first button press (DM_PAD_PRESS_TO_JOIN), and the pad's Joy-Con styles and player lights follow
@@ -295,7 +300,7 @@ static s2_pad *s2_pad_for(uint16_t pid) {   // a Joy-Con joins a pad that has th
     __weak S2Session *w = self;   // the link drops after about ten seconds without a write from the host, so the LEDs are written once a second
     _tick = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
         S2Session *s = w; if (!s) { [t invalidate]; return; }
-        int pl = s2_player(s->_pad); uint8_t l[4] = {s2_led_pattern[pl >= 0 && pl < 8 ? pl : 0], 0, 0, 0}; uint8_t f[12];
+        uint8_t l[4] = {[s playerLEDs], 0, 0, 0}; uint8_t f[12];
         size_t n = s2_command(f, sizeof f, S2_CMD_LEDS, S2_SUB_LEDS_SET, l, 4);
         if (s->_wr && n) [s->_peripheral writeValue:[NSData dataWithBytes:f length:n] forCharacteristic:s->_wr type:CBCharacteristicWriteWithoutResponse];
         if (!s->_mouseOn && [s features] != S2_FEATURES) [s mouseOn];
@@ -548,4 +553,13 @@ int dm_switch2_start(const dm_switch2_front *front) {
     if (e && sscanf(e, "%x%c%x%c%x%c%x%c%x%c%x", &v[0], &sep, &v[1], &sep, &v[2], &sep, &v[3], &sep, &v[4], &sep, &v[5]) == 11) { for (int i = 0; i < 6; i++) g_host[i] = (uint8_t)v[5 - i]; g_host_known = 1; }
     s2_central_start();   // the main queue: the pad callbacks run where the front end's do. On the Mac this Mac's address is read once Bluetooth is allowed (centralManagerDidUpdateState)
     return 1;
+}
+
+int dm_switch2_identify(s2_pad *pad) {
+    int found = 0;
+    for (S2Session *session in g_sessions.allValues) if (session.live && session.pad == pad) {
+        found = 1; session.identifyUntil = now_ns() + 650000000ull; [session setLEDs:nil];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 650 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ if (session.live) [session setLEDs:nil]; });
+    }
+    return found;
 }

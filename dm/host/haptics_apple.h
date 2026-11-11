@@ -8,3 +8,5 @@ void dm_haptics_apple_controller(int player, GCController *controller);
 // rumble queue, with Rumble strength and Rumble cutoff applied (DM_RUMBLE_GAIN, DM_RUMBLE_MIN; amplitudes 0..1). A suspension (focus lost) sends silence. NULL gives the player back.
 void dm_haptics_apple_set_sink(int player, void (*sink)(const dm_haptic_state *state));
 void dm_haptics_apple_shutdown(void);
+
+BOOL dm_haptics_apple_identify(GCController *controller); // main thread, a short independent signal

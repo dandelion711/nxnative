@@ -29,6 +29,7 @@
 #include "pad_apple.h"
 #include "pad_slots.h"
 #include "ctrl_prompt.h"
+#import "controller_setup_apple.h"
 #include <stdatomic.h>
 #import "DmLayout.h"
 #import "DmGameMenu.h"
@@ -583,9 +584,10 @@ static void read_pad(GCExtendedGamepad *g) {
         GCController *c = g.controller; char nb[16];
         if (!m) return;
         if ((p = pad_slot_take_lowest(&g_slots, (__bridge const void *)c, pad_name(c))) < 0) { LOG("controller '%s': a button pressed, but all %d players are taken", pad_name(c), DM_PLAYERS); return; }
-        g_held[p] = c; dm_motion_attach(c, p); dm_pad_players(pad_slot_mask(&g_slots));
+        g_held[p] = c; dm_motion_attach(c, p); dm_controller_source_name(p, pad_name(c)); dm_pad_players(pad_slot_mask(&g_slots));
         npad_name(p, nb, sizeof nb); LOG("controller '%s': a button pressed: player %d (npad %s)", pad_name(c), p + 1, nb);
     }
+    dm_controller_native_joy(p, [g.controller.productCategory containsString:@"Joy-Con"]);
     if (cp_poll()) return;   // the controller applet's prompt has the controllers (front_ctrl_support)
     dm_haptics_apple_controller(p, g.controller);
     dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
@@ -621,6 +623,7 @@ static BOOL pads_slotted(GCController *gone) {
         g_held[p].extendedGamepad.valueChangedHandler = nil;
         dm_motion_detach(g_held[p], p);   // player 1's: the phone's gyro (if on) takes over from its next sample
         dm_haptics_apple_controller(p, nil);
+        dm_controller_forget_source(p);
         pad_slot_free(&g_slots, (__bridge const void *)g_held[p]); g_held[p] = nil;
         dm_pad_set_player(p, 0, 0, 0, 0, 0);   // nothing stays pressed
     }
@@ -633,7 +636,7 @@ static BOOL pads_slotted(GCController *gone) {
         }
         int p = pad_slot_take(&g_slots, (__bridge const void *)c, pad_name(c));
         if (p < 0) { LOG("controller '%s' connected: all %d players are taken, not used", pad_name(c), DM_PLAYERS); continue; }
-        g_held[p] = c; pad_keep_system_buttons(c);
+        g_held[p] = c; pad_keep_system_buttons(c); dm_controller_source_name(p, pad_name(c));
         c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g); };
         dm_motion_attach(c, p);
         npad_name(p, nb, sizeof nb); LOG("controller '%s' connected: player %d (npad %s)%s", pad_name(c), p + 1, nb, c.motion.hasRotationRate ? ", with motion (gyro)" : "");
@@ -651,11 +654,40 @@ static BOOL pads_slotted(GCController *gone) {
 }
 @end
 
-// The controller applet's prompt (front.h front_ctrl_support, ctrl_prompt.h; GitHub issue #1640), as the Mac's (front_mac.m): the game asked for more players than it sees, and
-// the game's thread waits while a card is up over the game. A controller that joins meanwhile is a player at once (its first button with DM_PAD_PRESS_TO_JOIN, its connection
-// without) and the count follows. A and B are GameController's buttonA and buttonB on any controller (the press that makes a controller join does not count); the card's
-// Done and Cancel buttons take touches, and its scrim keeps every other touch from the game and the touch gamepad. The game gets no controller input while it is up, nor
-// until the A or B that closed it is let go. A front end passes the texts in the player's language as DM_CTRL_PROMPT_TEXT (cp_text). Main thread
+// Same controller applet and input ownership as the Mac. Touch, keyboard and motion sources retain upstream slots.
+static DmControllerSetup *g_controller_setup; static dispatch_semaphore_t g_setup_done; static int g_setup_ok;
+static void controller_setup_open(int low, int high, int pair) {
+    if (g_controller_setup.blocksInput) { [g_controller_setup requirementsMinimum:low maximum:high permitPair:pair]; return; }
+    UIWindow *window = g_view.window; if (!window) { if (g_setup_done) { g_setup_ok = 0; dispatch_semaphore_signal(g_setup_done); g_setup_done = nil; } return; }
+    [g_view reset]; dm_touch_set(NULL, 0); dm_input_hold(1);
+    g_controller_setup = [DmControllerSetup new];
+    g_controller_setup.devices = ^NSArray *{
+        NSMutableArray *rows = [NSMutableArray new];
+        for (GCController *c in GCController.controllers) if (c.extendedGamepad) [rows addObject:cs_gc_device(c, g_merge ? -2 : pad_slot_of(&g_slots, (__bridge const void *)c))];
+        return rows;
+    };
+    g_controller_setup.buttons = ^unsigned { return cs_gc_buttons(); };
+    g_controller_setup.finished = ^(BOOL ok) {
+        dm_input_hold(0);
+        for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p].extendedGamepad) read_pad(g_held[p].extendedGamepad);
+        g_setup_ok = ok; if (g_setup_done) { dispatch_semaphore_t done = g_setup_done; g_setup_done = nil; dispatch_semaphore_signal(done); }
+    };
+    [g_controller_setup openIn:window minimum:low maximum:high permitPair:pair];
+}
+void dm_controller_menu_open(void) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ dm_controller_configure(); });
+}
+int front_controller_setup(int min, int max) {
+    if (!front_metal_layer()) return -1;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        int low, high, pair; dm_controller_request(&low, &high, &pair);
+        g_setup_done = done; controller_setup_open(min, max, pair);
+    });
+    dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+    return g_setup_ok;
+}
+
 static ctrl_prompt g_cp; static int g_cp_confirm, g_cp_cancel, g_cp_ok;
 static UIView *g_cp_view; static UILabel *g_cp_count; static UIButton *g_cp_done_btn; static dispatch_semaphore_t g_cp_done;
 @interface DmCtrlPrompt : NSObject @end
@@ -713,6 +745,7 @@ static void cp_show(void) {   // the card once per prompt; its count and its Don
 }
 // One step of the prompt (a button, a touch on the card, a controller joining, coming or going); returns whether it keeps the game's input
 static int cp_poll(void) {
+    if (g_controller_setup.blocksInput) return 1;
     if (g_cp.phase == CP_IDLE) return 0;
     int a, b, joined = dm_players_reported(); cp_buttons(&a, &b);
     int confirm = g_cp_confirm, cancel = g_cp_cancel; g_cp_confirm = g_cp_cancel = 0;

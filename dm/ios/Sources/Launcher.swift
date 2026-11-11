@@ -95,6 +95,7 @@ private struct DocumentPicker: UIViewControllerRepresentable {
 private struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     let play: () -> Void
+    @State private var configureOnPlay = false
     @State private var memory = os_proc_available_memory()
     @State private var checking = false
     @State private var check = 0   // which Play the running check is for: one the player went on from without it is dropped
@@ -121,9 +122,28 @@ private struct LauncherView: View {
                 List {
                     ForEach(m.sections, id: \.self) { section in
                         let rows = m.rows(in: section)
-                        if !rows.isEmpty {
+                        if !rows.isEmpty || section == "Controls" {
                             Section(section) {
                                 ForEach(rows) { SettingRow(s: $0, m: m) }
+                                if section == "Controls" {
+                                    HStack(spacing: 10) {
+                                        Button(configureOnPlay ? "Cancel" : "Configure Controllers") {
+                                            configureOnPlay.toggle()
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .fixedSize()
+                                        if configureOnPlay {
+                                            Label {
+                                                Text("Configuration menu will open after game launch")
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                            } icon: {
+                                                Image(systemName: "checkmark").foregroundStyle(.green)
+                                            }
+                                            .font(.callout)
+                                            .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -217,6 +237,7 @@ private struct LauncherView: View {
     private func go(_ choice: String?) {
         asking = nil
         if let choice { setenv("DM_SAVE_SYNC_CHOICE", choice, 1); fputs("launcher: DM_SAVE_SYNC_CHOICE=\(choice)\n", stderr) }
+        if configureOnPlay { setenv("DM_CONTROLLER_SETUP_ON_START", "1", 1) }
         play()
     }
 

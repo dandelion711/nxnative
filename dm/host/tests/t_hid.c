@@ -16,6 +16,12 @@ void front_web_shot(const char *path) { (void)path; }
 // The controller applet's prompt (front.h): -1 is no window; a test sets the answer and the players that join while it is up
 static int g_prompt_answer = -1, g_prompt_calls, g_prompt_min, g_prompt_max; static uint32_t g_prompt_join;
 int front_ctrl_support(int min, int max) { g_prompt_calls++; g_prompt_min = min; g_prompt_max = max; if (g_prompt_join) dm_pad_players(g_prompt_join); return g_prompt_answer; }
+static int g_setup_calls, g_setup_answer = -1, g_setup_after_join, g_setup_min, g_setup_max; static uint64_t g_setup_routes;
+int front_controller_setup(int min, int max) {
+    g_setup_calls++; g_setup_after_join = g_prompt_calls; g_setup_min=min; g_setup_max=max;
+    return g_setup_answer > 0 ? dm_controller_apply(g_setup_routes,min,max,1) : g_setup_answer;
+}
+
 
 static int checks, fails, g_mode = 1, g_signals;
 static void *g_signalled;
@@ -63,6 +69,165 @@ static uint64_t buttons_of(uint32_t id, uint32_t style) { NpadState s; fill(&s, 
 static int32_t lx_of(uint32_t id) { NpadState s; fill(&s, id, STYLE_FULLKEY); return s.lx; }
 static void ids(const uint32_t *v, uint64_t n) { h_hid_SetIds(v, n); }
 static NpadState npad_of(uint32_t id, uint32_t style) { NpadState s; fill(&s, id, style); return s; }   // all of it, the rail buttons (bits 24..27) included
+
+static void t_controller_setup(void) {
+    g_mode = 1; uint32_t supported[] = {0, 1, 2, 3}; ids(supported, 4); h_hid_SetStyles(0x1d);
+    dm_pad_players(3); dm_joy_attach(0, 0); dm_joy_attach(1, 0);
+    uint64_t extra = cs_put(0, 1, cs_encode(CS_PRO, 1, 1));
+    CHECK(cs_can_apply(dm_controller_preview(extra, 1, 1, 1)), "a player's saved session route outside this request's range does not block its only visible player");
+    CHECK(!dm_controller_apply(cs_put(0, 7, 255), 1, 1, 1), "reserved route bytes are rejected even outside the current player range");
+    CHECK(!dm_controller_apply(cs_put(0, 7, cs_encode(CS_PRO, 7, 7)), 1, 1, 1), "an inactive route cannot claim a device that has not connected");
+    uint64_t pair = cs_put(0, 0, cs_encode(CS_PAIR, 0, 1));
+    cs_status st = dm_controller_preview(pair, 1, 1, 1);
+    CHECK(st.ready == 1 && !st.invalid, "claiming P2's automatic source makes one complete player, not a second ready player");
+    CHECK(dm_controller_routes() == 0, "preview does not change the live routes");
+    CHECK(dm_controller_apply(pair, 1, 1, 1), "two physical gamepads make one player's pair");
+    dm_pad_set_player(0, DM_BTN_LEFT | DM_BTN_L, 1000, 2000, 0, 0);
+    dm_pad_set_player(1, DM_BTN_A | DM_BTN_R, 0, 0, 3000, 4000);
+    NpadState state = npad_of(0, STYLE_JOYDUAL);
+    CHECK((state.buttons & (DM_BTN_LEFT | DM_BTN_A | DM_BTN_L | DM_BTN_R)) == (DM_BTN_LEFT | DM_BTN_A | DM_BTN_L | DM_BTN_R), "both devices' buttons reach their respective halves");
+    CHECK(state.lx == 1000 && state.rx == 3000, "both devices' sticks reach their respective halves");
+    dm_pad_set_player(0,0,0,0,0,0); dm_pad_set_player(1,0,5000,6000,7000,8000);
+    state=npad_of(0,STYLE_JOYDUAL);
+    CHECK(state.lx==5000 && state.ly==6000 && state.rx==7000 && state.ry==8000,"right assigned gamepad can drive both virtual sticks by their normal positions");
+    dm_pad_set_player(1,0,0,0,0,0); dm_pad_set_player(0,0,5000,6000,7000,8000);
+    state=npad_of(0,STYLE_JOYDUAL);
+    CHECK(state.lx==5000 && state.ly==6000 && state.rx==7000 && state.ry==8000,"left assigned gamepad uses the same stick positions");
+    dm_pad_set_player(0, DM_BTN_A, 0, 0, 0, 0); dm_pad_set_player(1, DM_BTN_A | DM_BTN_LEFT, 0, 0, 0, 0);
+    state = npad_of(0, STYLE_JOYDUAL);
+    CHECK((state.buttons & (DM_BTN_A | DM_BTN_LEFT)) == (DM_BTN_A | DM_BTN_LEFT), "either paired gamepad can send both left and right buttons");
+    dm_pad_set_player(0, 0, 0, 0, 0, 0); state = npad_of(0, STYLE_JOYDUAL);
+    CHECK(state.buttons & DM_BTN_A, "releasing one paired gamepad does not cancel the other's held button");
+    dm_pad_set_player(1, 0, 0, 0, 0, 0); state = npad_of(0, STYLE_JOYDUAL);
+    CHECK(!state.buttons, "the shared button releases after both sources release");
+    CHECK(dm_players_reported() == 1 && style_of(1) == 0, "borrowed automatic player disappears from guest count");
+    uint64_t duplicate = cs_put(pair, 1, cs_encode(CS_PRO, 0, 0));
+    CHECK(!dm_controller_apply(duplicate, 1, 2, 1) && dm_controller_routes() == pair, "a duplicate source cannot partially apply");
+    CHECK(!dm_controller_apply(pair, 1, 1, 0), "pair forbidden in this applet request");
+    int motor = -1; dm_haptics_route(0, 1); dm_haptics_route(1, 1);
+    CHECK(vib_targets(5, &motor) == 1 && motor == 0, "left rumble keeps physical source zero");
+    CHECK(vib_targets(5 | 1u << 16, &motor) == 2 && motor == 1, "right rumble keeps physical source one");
+    motion_now += 100000000; float a[3] = {0, 0, -1}, left[3] = {1, 0, 0}, right[3] = {0, 2, 0};
+    dm_motion_set(0, a, left); dm_motion_set(1, a, right);
+    SixAxisState l, r; six_states(&l, 1, 2); six_states(&r, 1, 2 | 1u << 16);
+    CHECK(l.gyro[0] != 0 && l.gyro[1] == 0 && r.gyro[1] != 0 && r.gyro[0] == 0, "each paired hand has its own physical gyro");
+    void *old_events[DM_PLAYERS]; for (int p = 0; p < DM_PLAYERS; p++) old_events[p] = g_style_ev[p], g_style_ev[p] = NULL;
+    g_style_ev[0] = (void *)0x1234; g_style_told[0] = style_of(0); g_signals = 0;
+    dm_pad_players(1);
+    CHECK(g_signals > 0 && g_signalled == (void *)0x1234, "disconnecting the borrowed source signals the logical player's style event");
+    for (int p = 0; p < DM_PLAYERS; p++) g_style_ev[p] = old_events[p];
+    CHECK(cs_get(dm_controller_routes(), 0) > CS_OFF && dm_players_reported() == 0, "disconnected pair is unavailable while its assignment waits for reconnection");
+    dm_pad_players(3); CHECK(style_of(0) == STYLE_JOYDUAL, "reconnecting the pair restores its selected style");
+    atomic_store(&g_controller_routes, 0); dm_pad_players(3);
+    uint64_t single = cs_put(0, 0, cs_encode(CS_PAIR, 1, 1));
+    CHECK(dm_controller_apply(single, 1, 1, 1), "one gamepad can provide both halves");
+    motion_now += 100000000; dm_motion_set(1, a, right);
+    six_states(&l,1,2); six_states(&r,1,2 | 1u<<16);
+    CHECK(l.gyro[1] != 0 && r.gyro[1] == l.gyro[1], "a one-gamepad pair supplies its live gyro to both virtual hands");
+    dm_pad_set_player(1, DM_BTN_A | DM_BTN_LEFT, 100, 200, 300, 400); dm_pad_set_player(1, 0, 0, 0, 0, 0);
+    state = npad_of(0, STYLE_JOYDUAL);
+    CHECK((state.buttons & (DM_BTN_A | DM_BTN_LEFT)) == (DM_BTN_A | DM_BTN_LEFT), "one-pad pair preserves short taps on both halves");
+    dm_input_hold(1); state = npad_of(0, STYLE_JOYDUAL); CHECK(!state.buttons && !state.lx && !state.rx, "setup hold blocks Joy-Con input too"); dm_input_hold(0);
+    atomic_store(&g_controller_routes, 0); dm_pad_players(3);
+    uint64_t player_two = cs_put(cs_put(0, 0, CS_OFF), 1, cs_encode(CS_PRO, 1, 1));
+    CHECK(dm_controller_apply(player_two, 1, 2, 1), "a single ready player need not be player one");
+    int8_t request[6] = {1, 2, 0, 0, 1, 0}; int32_t result[2] = {0};
+    CHECK(ctrl_support(result, request) == RES_OK && result[0] == 1 && result[1] == 1, "applet selects an actually connected npad when player one is unassigned");
+    atomic_store(&g_controller_routes, 0); dm_pad_players(3);
+    uint64_t left_only = cs_put(0, 0, cs_encode(CS_LEFT, 0, 0));
+    CHECK(dm_controller_apply(left_only, 1, 2, 1), "full gamepad can stand in for Joy-Con L");
+    dm_pad_set_player(0, DM_BTN_A | DM_BTN_L | DM_BTN_R, 100, 200, 0, 0); state = npad_of(0, STYLE_JOYLEFT);
+    CHECK((state.buttons & (DM_BTN_RIGHT | DM_BTN_LSL | DM_BTN_LSR)) == (DM_BTN_RIGHT | DM_BTN_LSL | DM_BTN_LSR), "single Joy-Con supports the face cluster and SL/SR confirmation");
+    dm_pad_set_player(0, DM_BTN_ZR | DM_BTN_PLUS | DM_BTN_RS, 100, 200, 0, 0); state = npad_of(0, STYLE_JOYLEFT);
+    CHECK((state.buttons & (DM_BTN_L | DM_BTN_MINUS | DM_BTN_LS)) == (DM_BTN_L | DM_BTN_MINUS | DM_BTN_LS), "left Joy-Con adapts outer trigger, menu and stick click");
+    for (int right_side = 0; right_side < 2; right_side++) {
+        atomic_store(&g_controller_routes, cs_put(0, 0, cs_encode(right_side ? CS_RIGHT : CS_LEFT, 0, 0)));
+        h_hid_HoldType(1); dm_pad_set_player(0, DM_BTN_A, 100, 200, 0, 0);
+        state = npad_of(0, right_side ? STYLE_JOYRIGHT : STYLE_JOYLEFT);
+        CHECK((state.buttons & (right_side ? DM_BTN_X : DM_BTN_DOWN)) != 0, "sideways buttons compensate according to the selected Joy-Con side");
+        CHECK(right_side ? state.rx == -200 && state.ry == 100 : state.lx == 200 && state.ly == -100, "sideways sticks compensate without physically rotating the gamepad");
+        h_hid_HoldType(0); dm_pad_set_player(0, DM_BTN_ZL | DM_BTN_MINUS | DM_BTN_LS, 100, 200, 0, 0);
+        state = npad_of(0, right_side ? STYLE_JOYRIGHT : STYLE_JOYLEFT);
+        if (right_side) CHECK((state.buttons & (DM_BTN_R | DM_BTN_PLUS | DM_BTN_RS)) == (DM_BTN_R | DM_BTN_PLUS | DM_BTN_RS), "right Joy-Con adapts outer trigger, menu and stick click");
+    }
+    atomic_store(&g_controller_routes, left_only); dm_controller_native_joy(0, 1);
+    h_hid_HoldType(1); dm_pad_set_player(0, DM_BTN_RIGHT, 100, 200, 0, 0); state = npad_of(0, STYLE_JOYLEFT);
+    CHECK((state.buttons & DM_BTN_RIGHT) && state.lx == 100 && state.ly == 200, "GameController's real Joy-Con input is not rotated or adapted");
+    dm_controller_native_joy(0, 0); dm_joy_attach(0, 1); dm_joy_set(0, 0, DM_BTN_UP, 300, 400);
+    state = npad_of(0, STYLE_JOYLEFT);
+    CHECK((state.buttons & DM_BTN_UP) && state.lx == 300 && state.ly == 400, "native transport Joy-Con input keeps its own orientation");
+    dm_joy_attach(0, 0); h_hid_HoldType(0);
+    dm_controller_source_name(0, "Original"); dm_controller_forget_source(0);
+    CHECK(style_of(0) == 0, "a disconnected physical slot cannot publish its pending route");
+    dm_controller_source_name(0, "Original"); dm_pad_players(3);
+    CHECK(style_of(0) == STYLE_JOYLEFT, "the original slot model restores the pending assignment");
+    dm_controller_forget_source(0); dm_controller_source_name(0, "Replacement"); dm_pad_players(3);
+    CHECK(cs_get(dm_controller_routes(), 0) == CS_AUTO, "a different controller model falls back to Automatic");
+    atomic_store(&g_controller_routes, 0); dm_joy_attach(0, 1);
+    CHECK(!dm_controller_apply(cs_put(0, 0, cs_encode(CS_PAIR, 0, 0)), 1, 1, 1), "a native left Joy-Con cannot supply a complete pair alone");
+    dm_joy_attach(0, 3); dm_pad_players(5); atomic_store(&g_controller_routes, cs_put(0, 2, cs_encode(CS_PRO, 2, 2)));
+    joy_assign(0, 0, 0); int calls_before = g_prompt_calls; int8_t three_players[6] = {3, 3, 0, 0, 1, 0};
+    CHECK(ctrl_support(NULL, three_players) == RES_OK && dm_players_reported() == 3 && g_prompt_calls == calls_before, "a manual choice for another player does not disable upstream's automatic Joy-Con splitting");
+    joy_assign(0, 0, 0); atomic_store(&g_controller_routes, 0); dm_pad_players(3);
+    dm_joy_attach(0, 0); h_hid_SetStyles(STYLE_JOYDUAL2);
+    CHECK(!cs_can_apply(dm_controller_preview(cs_put(0, 0, cs_encode(CS_PAIR, 0, 0)), 1, 1, 1)), "a generic pad is not incorrectly ready when a game permits only Joy-Con 2");
+    dm_joy_attach(0, 3 | DM_JOY_2);
+    CHECK(cs_can_apply(dm_controller_preview(cs_put(0, 0, cs_encode(CS_PAIR, 0, 0)), 1, 1, 1)), "native Joy-Con 2 uses upstream's extended style bits");
+    dm_joy_attach(0, 0);
+    h_hid_SetStyles(0x1d); dm_pad_players(1); dm_joy_attach(0,3); joy_assign(0,0,0);
+    uint32_t aliases[] = {0,1,0x20}; ids(aliases,3); atomic_store(&g_controller_routes,0);
+    CHECK(dm_controller_apply(cs_put(0,0,cs_encode(CS_PAIR,0,0)),1,2,1), "native pair can be configured");
+    CHECK(style_of(0) == STYLE_JOYDUAL && style_of(0x20) == 0, "configured player one appears on only its active controller ID");
+    dm_joy_attach(0,1);
+    CHECK(style_of(0) == 0 && !cs_can_apply(dm_controller_preview(dm_controller_routes(),1,2,1)), "a missing native half disconnects gameplay and readiness together");
+    dm_joy_attach(0,3); joy_assign(0,1,0);
+    CHECK(style_of(0) == STYLE_JOYLEFT && style_of(1) == STYLE_JOYRIGHT && dm_players_reported() == 2, "configured native pair obeys the game's split request");
+    joy_assign(0,0,0); CHECK(style_of(0) == STYLE_JOYDUAL && style_of(1) == 0, "dual assignment rejoins the configured native pair");
+    uint64_t draft = cs_put(0,0,cs_encode(CS_PAIR,1,1)); dm_joy_attach(0,0); dm_joy_attach(1,3); dm_pad_players(2); joy_assign(0,1,0);
+    CHECK(dm_controller_preview(draft,2,2,1).ready == 3, "draft native split resolves both halves before its routes are committed");
+    joy_assign(0,0,0);
+    atomic_store(&g_controller_routes,0); dm_joy_attach(0,0); dm_joy_attach(1,3); dm_pad_players(2);
+    CHECK(dm_controller_apply(cs_put(0,0,cs_encode(CS_PAIR,1,1)),1,2,1), "native pair can move from physical slot two to player one");
+    uint32_t split_id = 0, other_id = 99;
+    CHECK(h_hid_JoySingleOut(&other_id,&split_id,0) && other_id == 1, "split request returns the other half of a relocated native pair");
+    CHECK(style_of(0) == STYLE_JOYLEFT && style_of(1) == STYLE_JOYRIGHT, "split allocation uses logical free players rather than borrowed physical slots");
+    joy_assign(0,0,0); dm_joy_attach(1,0); atomic_store(&g_controller_routes,0); dm_pad_players(3);
+    int8_t single_request[6]={1,8,0,0,1,1}; int32_t single_result[2]={0};
+    CHECK(ctrl_support(single_result,single_request) == RES_OK && single_result[0] == 1, "single-mode applet returns its normalized ready count");
+    atomic_store(&g_controller_routes,0); dm_pad_players(1); h_hid_SetStyles(STYLE_FULLKEY);
+    int8_t join_request[6]={2,2,0,0,1,0}; int before=g_prompt_calls, setups=g_setup_calls;
+    g_prompt_answer=1; g_prompt_join=3;
+    CHECK(ctrl_support(NULL,join_request)==RES_OK && g_prompt_calls==before+1 && g_setup_calls==setups,"shortage uses upstream joining only");
+    dm_pad_players(1);
+    CHECK(ctrl_support(NULL,join_request)==RES_OK && g_prompt_calls==before+2 && g_setup_calls==setups,"repeated shortage opens joining again");
+    dm_pad_players(1); h_hid_SetStyles(STYLE_JOYLEFT); g_prompt_answer=0;
+    CHECK(ctrl_support(NULL,join_request)==RES_CTRL_CANCELED && g_setup_calls==setups,"cancel joining does not open setup");
+    dm_pad_players(1); g_prompt_answer=1; g_prompt_join=1;
+    CHECK(ctrl_support(NULL,join_request)==RES_CTRL_CANCELED && g_setup_calls==setups,"unresolved shortage does not open setup");
+    dm_pad_players(1); g_prompt_join=3; g_setup_answer=1;
+    g_setup_routes=cs_put(cs_put(0,0,cs_encode(CS_LEFT,0,0)),1,cs_encode(CS_LEFT,1,1)); before=g_prompt_calls;
+    CHECK(ctrl_support(NULL,join_request)==RES_OK && g_prompt_calls==before+1 && g_setup_calls==setups+1 && g_setup_after_join==g_prompt_calls,"joining finishes before incompatible style setup");
+    atomic_store(&g_controller_routes,0); dm_pad_players(3); before=g_prompt_calls;
+    CHECK(ctrl_support(NULL,join_request)==RES_OK && g_prompt_calls==before && g_setup_calls==setups+2,"type mismatch opens setup directly");
+    CHECK(ctrl_support(NULL,join_request)==RES_OK && g_prompt_calls==before && g_setup_calls==setups+2,"compatible setup opens neither popup");
+    g_setup_answer=0; setups=g_setup_calls;
+    CHECK(dm_controller_configure()==0 && g_setup_calls==setups+1,"manual configuration opens the existing editor");
+    CHECK(g_setup_min==2 && g_setup_max==2,"manual configuration reuses the game requested two-player range");
+    pthread_mutex_lock(&g_controller_request_lock);
+    CHECK(dm_controller_configure()==0 && g_setup_calls==setups+1,"manual configuration cannot overlap another controller request");
+    pthread_mutex_unlock(&g_controller_request_lock);
+    g_last_min=1; g_last_max=DM_PLAYERS; dm_pad_players(3); dm_controller_configure();
+    CHECK(g_setup_min==1 && g_setup_max==2,"flexible requests use the current reported player count in manual setup");
+    dm_pad_players(1); dm_controller_configure();
+    CHECK(g_setup_max==1,"one reported player skips the manual player grid");
+    setups=g_setup_calls; unsetenv("DM_CONTROLLER_SETUP_ON_START"); dm_controller_configure_startup();
+    CHECK(g_setup_calls==setups,"ordinary startup does not open controller setup");
+    setenv("DM_CONTROLLER_SETUP_ON_START","1",1); dm_controller_configure_startup();
+    CHECK(g_setup_calls==setups+1 && !getenv("DM_CONTROLLER_SETUP_ON_START"),"launch-screen request opens setup once and is consumed");
+    dm_controller_configure_startup(); CHECK(g_setup_calls==setups+1,"startup handoff cannot reopen setup");
+    g_prompt_answer=-1; g_prompt_join=0; g_setup_answer=-1; g_setup_routes=0;
+    atomic_store(&g_controller_routes, 0); dm_pad_players(0); h_hid_SetStyles(0xffffffff); g_mode = 0;
+}
 
 static void t_slots(void) {
     pad_slots s; memset(&s, 0, sizeof s);
@@ -338,6 +503,16 @@ static void t_vibration(void) {
     dm_haptics_route(0, 1); dm_haptics_route(1, 1);
     h_hid_SendVib(&h[0], &v);
     CHECK(!memcmp(&vibration[0].motor[0], &v, sizeof v), "cached startup handles reach an output routed later");
+    dm_input_hold(1);
+    CHECK(vibration[0].motor[0].amplitude_low==0 && vibration[0].motor[0].amplitude_high==0,"opening controller setup stops an already running motor");
+    h_hid_SendVib(&h[0],&v);
+    CHECK(dm_haptics_actual(0,0).amplitude_low==0,"game rumble commands are suppressed while controller setup owns input");
+    dm_haptics_suspend(DM_HAPTICS_INACTIVE,1); dm_input_hold(0); h_hid_SendVib(&h[0],&v);
+    CHECK(dm_haptics_actual(0,0).amplitude_low==0,"closing setup cannot override application inactivity");
+    dm_haptics_suspend(DM_HAPTICS_INACTIVE,0);
+    CHECK(dm_haptics_actual(0,0).amplitude_low==0,"closing setup does not replay the stale effect");
+    h_hid_SendVib(&h[0],&v);
+    CHECK(dm_haptics_actual(0,0).amplitude_low==v.amplitude_low,"fresh game rumble resumes after setup closes");
     CHECK(h_hid_VibPermit() && h_hid_VibHandles(h, 2, &id, STYLE_FULLKEY) == 2, "two vibration motors available");
     CHECK(h[0] == 3 && h[1] == 0x10003, "SDK vibration handle bytes: style 3, npad 0, motors 0 and 1");
     CHECK(!h_hid_VibHandles(h, 2, &id, STYLE_HANDHELD), "wrong controller style gets no motors");
@@ -726,6 +901,7 @@ int main(void) {
         CHECK(pad_slot_take_lowest(&f, &o[DM_PLAYERS], "pad") == -1, "press: none left when every player is held");
         CHECK(pad_slot_take_lowest(&f, NULL, "pad") == -1, "press: no owner, no slot");
     }
+    t_controller_setup();
     printf("hid players: %d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

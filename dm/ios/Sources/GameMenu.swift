@@ -19,6 +19,7 @@ private func gameMenuItems() -> [UIMenuElement] {
         UIAction(title: names[l], state: dm_pad_layout() == l ? .on : .off) { _ in dm_pad_layout_set(Int32(l)) }
     }
     let layout = UIMenu(title: "Controller layout", options: .singleSelection, children: layouts)   // a choice's value shows in its submenu: a subtitle would make each row two lines
+    let configure = UIAction(title: "Configure Controllers", image: UIImage(systemName: "gamecontroller")) { _ in dm_controller_menu_open() }
     var items: [UIMenuElement] = []
     var placed = false
     if let m = gameMenuModel {
@@ -26,10 +27,11 @@ private func gameMenuItems() -> [UIMenuElement] {
             var rows: [UIMenuElement] = section == "Controls" ? [layout] : []
             if section == "Controls" { placed = true }
             for s in m.rows(in: section) where (s.kind == "choice" || s.kind == "toggle") && dm_setting_live(s.env, nil) { rows.append(gameMenuRow(m, s)) }
+            if section == "Controls" { rows.append(configure) }
             if !rows.isEmpty { items.append(UIMenu(options: .displayInline, children: rows)) }
         }
     }
-    if !placed { items.insert(UIMenu(options: .displayInline, children: [layout]), at: 0) }
+    if !placed { items.insert(UIMenu(options: .displayInline, children: [layout, configure]), at: 0) }
     return items
 }
 

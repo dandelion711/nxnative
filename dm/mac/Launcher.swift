@@ -121,6 +121,7 @@ struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     let done: (Bool) -> Void
     let fit: (CGFloat) -> Void
+    @State private var configureOnPlay = false
     @AppStorage("window.show") private var show = true
     @AppStorage("window.advanced") private var advanced = false
     @State private var checking = false
@@ -165,7 +166,7 @@ struct LauncherView: View {
                 if checking {
                     ProgressView().controlSize(.small)
                     Text("Checking the cloud save…").foregroundStyle(.secondary)
-                    Button("Play Without It") { checking = false; SaveCheck.apply("offline"); done(true) }
+                    Button("Play Without It") { checking = false; SaveCheck.apply("offline"); go() }
                 }
                 Button("Quit") { done(false) }
                 Button("Play") { start() }.keyboardShortcut(.defaultAction).disabled(checking)
@@ -176,6 +177,11 @@ struct LauncherView: View {
     }
 
     /// Play, once the cloud's save is compared with this Mac's: a save that changed on both sides is the player's pick, not the newer file's (SaveCheck)
+    private func go() {
+        if configureOnPlay { setenv("DM_CONTROLLER_SETUP_ON_START", "1", 1) }
+        done(true)
+    }
+
     private func start() {
         check += 1; checking = true
         let mine = check
@@ -185,7 +191,7 @@ struct LauncherView: View {
                 guard checking, check == mine else { return }   // the player played without it
                 checking = false
                 switch SaveCheck.ask(r, cancel: "Cancel") {
-                case .play(let choice): SaveCheck.apply(choice); done(true)
+                case .play(let choice): SaveCheck.apply(choice); go()
                 case .retry: start()
                 case .cancel: break   // back to the window, nothing chosen
                 }
@@ -196,9 +202,28 @@ struct LauncherView: View {
     @ViewBuilder private func settingSections(basic: Bool) -> some View {
         ForEach(m.sections(basic: basic), id: \.self) { section in
             let rows = m.rows(in: section, basic: basic)
-            if !rows.isEmpty {
+            if !rows.isEmpty || (!basic && section == "Controls") {
                 Section(section) {
                     ForEach(rows) { SettingRow(s: $0, m: m) }
+                    if !basic && section == "Controls" {
+                        HStack(spacing: 10) {
+                            Button(configureOnPlay ? "Cancel" : "Configure Controllers") {
+                                configureOnPlay.toggle()
+                            }
+                            .buttonStyle(.bordered)
+                            .fixedSize()
+                            if configureOnPlay {
+                                Label {
+                                    Text("Configuration menu will open after game launch")
+                                        .fixedSize(horizontal: false, vertical: true)
+                                } icon: {
+                                    Image(systemName: "checkmark").foregroundStyle(.green)
+                                }
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                 }
             }
         }
