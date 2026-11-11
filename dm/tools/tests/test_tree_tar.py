@@ -109,7 +109,7 @@ class PackQuiet(unittest.TestCase):
     def test_packs_a_quiet_folder_and_keeps_its_attributes(self):
         d = self.folder('issue1')
         subprocess.run(['xattr', '-w', 'org.d2rmobile.guest-name', 'Foo.txt', d / 'sub/f0'], check=True)
-        self.assertEqual(self.run_old(), ['issue1'])
+        with mock.patch.object(tree_tar, 'QUIET_FREE', 0): self.assertEqual(self.run_old(), ['issue1'])
         self.assertEqual(sorted(p.name for p in self.w.iterdir()), ['issue1.tar'])
         (self.w / 'back').mkdir()
         subprocess.run(['tar', '--xattrs', '-xf', self.w / 'issue1.tar', '-C', self.w / 'back'], check=True)
