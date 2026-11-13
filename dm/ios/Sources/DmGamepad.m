@@ -787,5 +787,8 @@ void dm_gamepad_reset(void) {   // On resign active: release everything (a key h
     dispatch_async(dispatch_get_main_queue(), ^{ [g_view reset]; });
     pthread_mutex_lock(&g_mu); g_shake_btn = 0; pthread_mutex_unlock(&g_mu); publish();
     if (g_merge) dm_pad_set(0, 0, 0, 0, 0);
-    else for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p]) dm_pad_set_player(p, 0, 0, 0, 0, 0);
+    else for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p]) {
+        dm_pad_set_player(p, 0, 0, 0, 0, 0);
+        dm_joy_set(p, 0, 0, 0, 0); dm_joy_set(p, 1, 0, 0, 0);
+    }
 }
